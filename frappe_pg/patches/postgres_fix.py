@@ -1,8 +1,7 @@
 """Backward-compatible imports for the original frappe_pg patch module.
 
-The active implementation lives under :mod:`frappe_pg.postgres`.  Keeping this
-module as a facade avoids a second, independent monkey-patch path that could
-otherwise wrap Frappe database methods more than once.
+The active implementation lives under :mod:`frappe_pg.postgres`. Keeping this
+module as a facade avoids a second, independent monkey-patch path.
 """
 
 from frappe_pg.postgres.database_patches import (
@@ -10,8 +9,6 @@ from frappe_pg.postgres.database_patches import (
 	apply_postgres_fixes,
 	check_patches_status,
 	on_session_creation,
-	patched_commit,
-	patched_rollback,
 	patched_transform_query,
 	remove_postgres_fixes,
 )
@@ -35,8 +32,6 @@ __all__ = [
 	"convert_ifnull_to_coalesce",
 	"create_missing_functions",
 	"on_session_creation",
-	"patched_commit",
-	"patched_rollback",
 	"patched_transform_query",
 	"remove_index_hints",
 	"remove_postgres_fixes",

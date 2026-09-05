@@ -72,9 +72,11 @@ class TestTransformQueryHook(unittest.TestCase):
 	def setUpClass(cls):
 		database_patches.apply_postgres_fixes()
 
-	def test_postgres_sql_is_not_replaced(self):
+	def test_postgres_execution_and_transaction_methods_are_not_replaced(self):
 		self.assertEqual(PostgresDatabase.sql.__name__, "sql")
 		self.assertEqual(PostgresDatabase.sql.__module__, "frappe.database.postgres.database")
+		self.assertEqual(PostgresDatabase.commit.__module__, "frappe.database.database")
+		self.assertEqual(PostgresDatabase.rollback.__module__, "frappe.database.database")
 		self.assertNotEqual(PostgresDatabase._transform_query.__module__, PostgresDatabase.sql.__module__)
 		self.assertIs(PostgresDatabase._transform_query, database_patches.patched_transform_query)
 
@@ -145,12 +147,8 @@ class TestTransformQueryHook(unittest.TestCase):
 
 	def test_patch_application_is_idempotent(self):
 		transform = PostgresDatabase._transform_query
-		commit = PostgresDatabase.commit
-		rollback = PostgresDatabase.rollback
 		database_patches.apply_postgres_fixes()
 		self.assertIs(PostgresDatabase._transform_query, transform)
-		self.assertIs(PostgresDatabase.commit, commit)
-		self.assertIs(PostgresDatabase.rollback, rollback)
 
 	def test_patch_can_be_safely_removed_and_reapplied(self):
 		database_patches.remove_postgres_fixes()
@@ -167,3 +165,5 @@ class TestTransformQueryHook(unittest.TestCase):
 		self.assertTrue(status["patches_applied"])
 		self.assertTrue(status["transform_query_patched"])
 		self.assertFalse(status["sql_patched"])
+		self.assertFalse(status["commit_patched"])
+		self.assertFalse(status["rollback_patched"])

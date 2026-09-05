@@ -33,8 +33,8 @@ This app provides:
 - `unix_timestamp()` function for epoch conversion
 - `timestampdiff()` function for time calculations
 
-### 4. Commit Error Logging
-- Preserves commit failure logging without replacing Frappe's SQL execution path
+### 4. Native Transaction Handling
+- Leaves commit, rollback, and SQL execution under Frappe's native implementation
 
 ## Configuration
 
@@ -174,7 +174,7 @@ Applying PostgreSQL Compatibility Patches for ERPNext
 ============================================================
 ✓ Query transformation hook applied
 ✓ Frappe PostgresDatabase.sql left unchanged
-✓ Commit/rollback error handling configured
+✓ Frappe SQL and transaction methods left unchanged
 
 The following transformations are now active:
   • FORCE/USE/IGNORE INDEX removal
