@@ -11,7 +11,6 @@ ERPNext and Frappe were originally designed for MariaDB/MySQL and use several My
 3. **IFNULL() function** - PostgreSQL uses COALESCE()
 4. **DATE_FORMAT()** - PostgreSQL uses TO_CHAR()
 5. **GROUP_CONCAT()** - PostgreSQL uses STRING_AGG() or custom aggregates
-6. **Transaction abort cascading** - PostgreSQL requires explicit rollback after errors
 
 ## Features
 
@@ -24,20 +23,18 @@ This app provides:
 - Converts `DATE_FORMAT(date, '%Y-%m-%d')` to `TO_CHAR(date, 'YYYY-MM-DD')`
 - Handles nested expressions correctly
 
-### 2. Transaction Error Handling
-- Automatic rollback on transaction abort errors
-- Retry mechanism for transient failures
-- Detailed error logging for debugging
+### 2. Native Frappe Query Execution
+- Leaves `PostgresDatabase.sql()` unchanged
+- Preserves Frappe's parameter normalization and `EmptyQueryValues` semantics
+- Preserves Frappe's native transaction and database error handling
 
 ### 3. Database Function Emulation
 - `GROUP_CONCAT(text)` aggregate function
 - `unix_timestamp()` function for epoch conversion
 - `timestampdiff()` function for time calculations
 
-### 4. Enhanced Error Logging
-- Logs syntax errors with original and transformed queries
-- Tracks function not found errors
-- Detailed transaction rollback logging
+### 4. Commit Error Logging
+- Preserves commit failure logging without replacing Frappe's SQL execution path
 
 ## Configuration
 
@@ -175,16 +172,15 @@ You should see this message in your logs when the patches are applied:
 ============================================================
 Applying PostgreSQL Compatibility Patches for ERPNext
 ============================================================
-✓ Query transformation patches applied
-✓ Transaction error handling enabled
-✓ Enhanced error logging configured
+✓ Query transformation hook applied
+✓ Frappe PostgresDatabase.sql left unchanged
+✓ Commit/rollback error handling configured
 
 The following transformations are now active:
-  • FORCE INDEX removal
+  • FORCE/USE/IGNORE INDEX removal
   • IF() → CASE WHEN conversion
   • IFNULL() → COALESCE() conversion
   • DATE_FORMAT() → TO_CHAR() conversion
-  • Automatic transaction rollback on errors
 ============================================================
 ```
 
@@ -192,7 +188,7 @@ The following transformations are now active:
 
 ### Error: "current transaction is aborted"
 
-This error means PostgreSQL encountered an error and aborted the transaction. The app should automatically handle this, but if you still see it:
+This error means PostgreSQL encountered an error and aborted the transaction. Frappe owns transaction recovery; if you see this error repeatedly:
 
 1. Clear your cache:
    ```bash
@@ -255,7 +251,7 @@ bench --site your-site-name execute frappe_pg.install_db_functions.install
 
 ### Architecture
 
-The app uses monkey-patching to intercept SQL queries at the Frappe database layer:
+The app uses Frappe's `_transform_query()` hook to apply SQL compatibility rewrites while leaving `PostgresDatabase.sql()` untouched:
 
 ```
 User Request
@@ -264,9 +260,9 @@ Frappe Controller
     ↓
 Query Builder
     ↓
-frappe_pg patches (our transformations)
-    ↓
 PostgresDatabase.sql (Frappe's PostgreSQL layer)
+    ↓
+frappe_pg `_transform_query()` hook
     ↓
 PostgreSQL Database
 ```
@@ -277,18 +273,12 @@ PostgreSQL Database
 2. **Convert IF()**: Transform to `CASE WHEN`
 3. **Convert IFNULL()**: Transform to `COALESCE()`
 4. **Convert DATE_FORMAT()**: Transform to `TO_CHAR()`
-5. **Apply Frappe's modify_query()**: Frappe's built-in transformations
-6. **Execute Query**: Send to PostgreSQL
+5. **Execution**: Frappe retains its native query-value normalization and sends the transformed SQL to PostgreSQL
 
-### Transaction Error Handling
+### Query execution ownership
 
-```python
-try:
-    execute_query()
-except InFailedSqlTransaction:
-    rollback()
-    retry_query()  # Up to 3 times
-```
+`frappe_pg` only transforms SQL text at Frappe's `_transform_query()` hook. Frappe retains native parameter normalization, transaction handling, tracing, execution, and database error semantics.
+
 
 ## Known Limitations
 

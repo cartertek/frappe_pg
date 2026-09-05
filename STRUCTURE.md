@@ -59,12 +59,11 @@ frappe_pg/
 ### Core Modules (`postgres/`)
 
 #### `database_patches.py`
-- Monkey-patches `PostgresDatabase.sql()` method
-- Applies query transformations before execution
-- Handles transaction errors with auto-rollback
-- Provides retry mechanism (up to 3 attempts)
+- Monkey-patches `PostgresDatabase._transform_query()` only
+- Applies query transformations immediately before execution
+- Leaves `PostgresDatabase.sql()` and Frappe query-value handling untouched
 - Functions:
-  - `patched_sql()`: Enhanced SQL execution
+  - `patched_transform_query()`: SQL compatibility transformation hook
   - `apply_postgres_fixes()`: Apply all patches
   - `check_patches_status()`: Verify patch status
 
@@ -155,7 +154,7 @@ These hooks ensure patches are applied:
    ```
 
 2. **Database Patches Applied**:
-   - `PostgresDatabase.sql` → `patched_sql`
+   - `PostgresDatabase._transform_query` → `patched_transform_query`
    - `PostgresDatabase.commit` → `patched_commit`
    - `PostgresDatabase.rollback` → `patched_rollback`
 
@@ -163,7 +162,7 @@ These hooks ensure patches are applied:
    ```
    User Query
        ↓
-   patched_sql()
+   patched_transform_query()
        ↓
    apply_all_query_transformations()
        ├→ remove_index_hints()
