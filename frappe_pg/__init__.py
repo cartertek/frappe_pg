@@ -23,18 +23,16 @@ __license__ = "MIT"
 
 # Import and apply patches immediately when the app loads
 try:
-	from frappe_pg.postgres.database_patches import apply_postgres_fixes
-
-	apply_postgres_fixes()
+    from frappe_pg.postgres.database_patches import apply_postgres_fixes
+    apply_postgres_fixes()
 except Exception as e:
-	# During installation, frappe might not be fully initialized
-	print(f"frappe_pg: Will apply database patches later: {e}")
+    # During installation, frappe might not be fully initialized
+    print(f"frappe_pg: Will apply database patches later: {e}")
 
 # Apply ERPNext trends.py patch for GROUP BY compatibility
 try:
-	from frappe_pg.patches.v1.fix_erpnext_trends import apply_trends_patch
-
-	apply_trends_patch()
+    from frappe_pg.patches.v1.fix_erpnext_trends import apply_trends_patch
+    apply_trends_patch()
 except Exception as e:
-	# ERPNext might not be installed or available yet
-	print(f"frappe_pg: Will apply trends patch later: {e}")
+    # ERPNext might not be installed or available yet
+    print(f"frappe_pg: Will apply trends patch later: {e}")
