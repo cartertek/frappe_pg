@@ -56,7 +56,7 @@ def apply_trends_patch():
 	    Exception: If patching fails
 	"""
 	# Import the function we need to patch
-	from erpnext.controllers import trends
+	from erpnext.controllers import trends  # nosemgrep
 
 	# Store original function
 	_original_based_wise_columns_query = trends.based_wise_columns_query

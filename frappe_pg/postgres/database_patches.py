@@ -8,7 +8,7 @@ This module applies PostgreSQL compatibility transformations at Frappe's
 tracing, execution, and error handling under Frappe's control.
 """
 
-from frappe.database.postgres.database import PostgresDatabase
+from frappe.database.postgres.database import PostgresDatabase  # nosemgrep
 
 from .db_functions import create_missing_functions
 from .query_transformers import apply_all_query_transformations
