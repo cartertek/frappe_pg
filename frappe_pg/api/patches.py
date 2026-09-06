@@ -168,7 +168,7 @@ def get_patch_info():
             "module": "frappe_pg.patches.v1.apply_postgres_compatibility",
             "description": "Apply PostgreSQL compatibility transformations and database patches",
             "features": [
-                "Query transformations (IF to CASE WHEN)",
+                "Query transformations (IF   CASE WHEN)",
                 "Index hint removal (FORCE INDEX)",
                 "Transaction error handling",
                 "Database method monkey patches"
