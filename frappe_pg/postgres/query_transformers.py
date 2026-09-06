@@ -279,20 +279,24 @@ def convert_numeric_truthiness(query):
     operand = re.compile(
         rf'(?P<prefix>\bWHERE\b|\bHAVING\b|\bON\b|\bAND\b|\bOR\b|\()'
         rf'(?P<space>\s*)(?P<identifier>{_QUOTED_IDENTIFIER})'
-        rf'(?=\s*(?:\bAND\b|\bOR\b|\)|$))',
+        rf'(?=(?P<trailing>\s*)(?P<suffix>\bAND\b|\bOR\b|\)|$))',
         re.IGNORECASE,
     )
+
+    def replace(match):
+        # ``("name")`` is equally valid as a function/group argument and does
+        # not establish boolean context. Require an adjacent AND/OR when the
+        # only prefix is an opening parenthesis. This still covers Frappe HR's
+        # ``("claimed_amount" AND "return_amount")`` query-builder output.
+        if match.group("prefix") == "(" and match.group("suffix") == ")":
+            return match.group(0)
+        return f'{match.group("prefix")}{match.group("space")}' f'({match.group("identifier")} <> 0)'
 
     # Re-run until nested shapes such as ("claimed_amount" AND "return_amount")
     # are fully normalized. Replacements are idempotent because ``<> 0`` no
     # longer matches the bare-identifier lookahead.
     while True:
-        transformed, count = operand.subn(
-            lambda match: (
-                f'{match.group("prefix")}{match.group("space")}' f'({match.group("identifier")} <> 0)'
-            ),
-            query,
-        )
+        transformed, count = operand.subn(replace, query)
         query = transformed
         if not count:
             return query
