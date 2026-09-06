@@ -85,6 +85,10 @@ class TestQueryTransformers(unittest.TestCase):
         query = 'WHERE "paid_amount"="return_amount" AND "docstatus"=1'
         self.assertEqual(convert_numeric_truthiness(query), query)
 
+    def test_numeric_truthiness_does_not_touch_function_arguments(self):
+        query = 'SELECT MAX(CHAR_LENGTH("name")) FROM "tabDocField"'
+        self.assertEqual(convert_numeric_truthiness(query), query)
+
     def test_double_quoted_mysql_string_literal_with_spaces(self):
         query = 'SELECT * FROM "tabSingles" WHERE doctype = "HR Settings" AND field = \'x\''
         expected = 'SELECT * FROM "tabSingles" WHERE doctype = \'HR Settings\' AND field = \'x\''
