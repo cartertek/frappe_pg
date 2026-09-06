@@ -79,17 +79,10 @@ jobs:
       - name: Install MariaDB Client
         run: sudo apt-get install mariadb-client
 
-      - name: Prepare original Frappe baseline
-        run: |
-          git init /tmp/frappe-original
-          git -C /tmp/frappe-original remote add origin https://github.com/frappe/frappe.git
-          git -C /tmp/frappe-original fetch --depth 1 origin d9d231feb8f455b4f59280dd40da50d0eb2b3353
-          git -C /tmp/frappe-original checkout -b ci-original FETCH_HEAD
-
       - name: Setup
         run: |
           pip install frappe-bench
-          bench init --frappe-path file:///tmp/frappe-original --frappe-branch ci-original --skip-redis-config-generation --skip-assets --python "$(which python)" ~/frappe-bench
+          bench init --frappe-branch version-15 --skip-redis-config-generation --skip-assets --python "$(which python)" ~/frappe-bench
           mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL character_set_server = 'utf8mb4'"
           mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL collation_server = 'utf8mb4_unicode_ci'"
 
