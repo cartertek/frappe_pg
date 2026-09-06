@@ -10,6 +10,9 @@ from frappe_pg.postgres.query_transformers import (
     convert_date_format,
     convert_if_to_case,
     convert_ifnull_to_coalesce,
+    convert_mysql_double_quoted_literals,
+    convert_mysql_update_join,
+    convert_numeric_truthiness,
     remove_index_hints,
 )
 
@@ -54,6 +57,63 @@ class TestQueryTransformers(unittest.TestCase):
         for query, expected in cases.items():
             with self.subTest(query=query):
                 self.assertEqual(convert_date_format(query), expected)
+
+    def test_numeric_truthiness_from_hrms_employee_advance_patch(self):
+        query = (
+            'UPDATE "tabEmployee Advance" SET "status"=\'Returned\' '
+            'WHERE "docstatus"= \'1\' AND "return_amount" '
+            'AND "paid_amount"="return_amount" AND "status"=\'Paid\''
+        )
+        expected = (
+            'UPDATE "tabEmployee Advance" SET "status"=\'Returned\' '
+            'WHERE "docstatus"= \'1\' AND ("return_amount" <> 0) '
+            'AND "paid_amount"="return_amount" AND "status"=\'Paid\''
+        )
+        self.assertEqual(convert_numeric_truthiness(query), expected)
+
+        nested = (
+            'WHERE "docstatus"=1 AND ("claimed_amount" AND "return_amount") '
+            'AND "paid_amount"=("return_amount"+"claimed_amount")'
+        )
+        nested_expected = (
+            'WHERE "docstatus"=1 AND (("claimed_amount" <> 0) AND ("return_amount" <> 0)) '
+            'AND "paid_amount"=("return_amount"+"claimed_amount")'
+        )
+        self.assertEqual(convert_numeric_truthiness(nested), nested_expected)
+
+    def test_numeric_truthiness_does_not_touch_compared_identifiers(self):
+        query = 'WHERE "paid_amount"="return_amount" AND "docstatus"=1'
+        self.assertEqual(convert_numeric_truthiness(query), query)
+
+    def test_double_quoted_mysql_string_literal_with_spaces(self):
+        query = 'SELECT * FROM "tabSingles" WHERE doctype = "HR Settings" AND field = \'x\''
+        expected = 'SELECT * FROM "tabSingles" WHERE doctype = \'HR Settings\' AND field = \'x\''
+        self.assertEqual(convert_mysql_double_quoted_literals(query), expected)
+
+    def test_double_quoted_identifier_rhs_is_not_rewritten(self):
+        query = 'SELECT * FROM "tabEmployee Advance" WHERE "paid_amount" = "return_amount"'
+        self.assertEqual(convert_mysql_double_quoted_literals(query), query)
+
+    def test_simple_mysql_update_join(self):
+        query = (
+            'UPDATE "tabSalary Detail" "sd" JOIN "tabSalary Structure" "ss" '
+            'ON "ss"."name"="sd"."parent" SET "sd"."docstatus"= \'1\' '
+            'WHERE "ss"."docstatus"= \'1\' AND "sd"."parenttype"=%(param1)s'
+        )
+        expected = (
+            'UPDATE "tabSalary Detail" AS "sd" SET "docstatus"= \'1\' '
+            'FROM "tabSalary Structure" AS "ss" '
+            'WHERE "ss"."name"="sd"."parent" AND '
+            '"ss"."docstatus"= \'1\' AND "sd"."parenttype"=%(param1)s'
+        )
+        self.assertEqual(convert_mysql_update_join(query), expected)
+
+    def test_complex_update_join_is_left_unchanged(self):
+        query = (
+            'UPDATE "a" "a1" JOIN "b" "b1" ON "a1"."id"="b1"."id" '
+            'JOIN "c" "c1" ON "b1"."id"="c1"."id" SET "a1"."x"=1 WHERE "c1"."y"=2'
+        )
+        self.assertEqual(convert_mysql_update_join(query), query)
 
     def test_pipeline_is_idempotent_for_supported_transformations(self):
         queries = [
