@@ -181,6 +181,9 @@ The following transformations are now active:
   • IF() → CASE WHEN conversion
   • IFNULL() → COALESCE() conversion
   • DATE_FORMAT() → TO_CHAR() conversion
+  • Numeric truthiness → explicit boolean comparison
+  • Unambiguous double-quoted MySQL string literals → SQL strings
+  • Simple UPDATE ... JOIN → PostgreSQL UPDATE ... FROM
 ============================================================
 ```
 

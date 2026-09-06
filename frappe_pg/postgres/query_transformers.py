@@ -6,19 +6,21 @@ This module contains all SQL query transformation functions that convert
 MySQL-specific syntax to PostgreSQL-compatible syntax.
 """
 
+import re
+
 from frappe_pg.utils.regex_patterns import (
+    DATE_FORMAT_PATTERN,
     FORCE_INDEX_PATTERN,
-    USE_INDEX_PATTERN,
-    IGNORE_INDEX_PATTERN,
     IF_FUNCTION_PATTERN,
     IFNULL_PATTERN,
-    DATE_FORMAT_PATTERN
+    IGNORE_INDEX_PATTERN,
+    USE_INDEX_PATTERN,
 )
-
 
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
 
 def split_by_comma(text):
     """
@@ -48,7 +50,7 @@ def split_by_comma(text):
             if not in_string:
                 in_string = True
                 string_char = char
-            elif char == string_char and (i == 0 or text[i-1] != '\\'):
+            elif char == string_char and (i == 0 or text[i - 1] != '\\'):
                 in_string = False
                 string_char = None
             current.append(char)
@@ -75,6 +77,7 @@ def split_by_comma(text):
 # ============================================================================
 # Core Transformation Functions
 # ============================================================================
+
 
 def convert_if_to_case(query):
     """
@@ -126,7 +129,7 @@ def convert_if_to_case(query):
             if prev_char.isalnum() or prev_char == '_':
                 # This is part of another word like "DIFF(", skip it
                 # Temporarily replace it to skip in this iteration
-                query = query[:start_pos] + '___NOTIF___(' + query[match.end():]
+                query = query[:start_pos] + '___NOTIF___(' + query[match.end() :]
                 continue
 
         if_start = match.end() - 1  # Position of opening parenthesis
@@ -145,7 +148,7 @@ def convert_if_to_case(query):
                 if not in_string:
                     in_string = True
                     string_char = char
-                elif char == string_char and (pos == 0 or query[pos-1] != '\\'):
+                elif char == string_char and (pos == 0 or query[pos - 1] != '\\'):
                     in_string = False
                     string_char = None
             elif not in_string:
@@ -158,19 +161,19 @@ def convert_if_to_case(query):
 
         if paren_count != 0:
             # Malformed query, mark and skip
-            query = query[:start_pos] + '___BADIF___(' + query[if_start + 1:]
+            query = query[:start_pos] + '___BADIF___(' + query[if_start + 1 :]
             continue
 
         # Extract the IF content
         if_end = pos
-        if_content = query[if_start + 1:if_end - 1]
+        if_content = query[if_start + 1 : if_end - 1]
 
         # Split by commas, respecting parentheses and strings
         parts = split_by_comma(if_content)
 
         if len(parts) != 3:
             # Invalid IF syntax, mark and skip
-            query = query[:start_pos] + '___BADIF___(' + query[if_start + 1:]
+            query = query[:start_pos] + '___BADIF___(' + query[if_start + 1 :]
             continue
 
         condition = parts[0].strip()
@@ -258,6 +261,95 @@ def convert_date_format(query):
     return DATE_FORMAT_PATTERN.sub(r"TO_CHAR(\1, 'YYYY-MM-DD')", query)
 
 
+_QUOTED_IDENTIFIER = r'"(?:[^"]|"")+"(?:\."(?:[^"]|"")+")*'
+
+
+def convert_numeric_truthiness(query):
+    """Convert bare numeric identifiers in boolean predicates to PostgreSQL booleans.
+
+    MariaDB accepts numeric expressions directly in ``WHERE``/``AND``/``OR``
+    predicates, treating zero as false and non-zero as true. PostgreSQL requires
+    an actual boolean expression. Frappe Query Builder can emit this shape when
+    an application combines a numeric field directly with ``&``/``|``.
+
+    This transformer intentionally handles only a bare quoted identifier used as
+    a boolean operand. It does not attempt to infer the type of arbitrary SQL
+    expressions.
+    """
+    operand = re.compile(
+        rf'(?P<prefix>\bWHERE\b|\bHAVING\b|\bON\b|\bAND\b|\bOR\b|\()'
+        rf'(?P<space>\s*)(?P<identifier>{_QUOTED_IDENTIFIER})'
+        rf'(?=\s*(?:\bAND\b|\bOR\b|\)|$))',
+        re.IGNORECASE,
+    )
+
+    # Re-run until nested shapes such as ("claimed_amount" AND "return_amount")
+    # are fully normalized. Replacements are idempotent because ``<> 0`` no
+    # longer matches the bare-identifier lookahead.
+    while True:
+        transformed, count = operand.subn(
+            lambda match: (
+                f'{match.group("prefix")}{match.group("space")}' f'({match.group("identifier")} <> 0)'
+            ),
+            query,
+        )
+        query = transformed
+        if not count:
+            return query
+
+
+def convert_mysql_double_quoted_literals(query):
+    """Convert unambiguous MySQL double-quoted string literals to SQL strings.
+
+    PostgreSQL treats double quotes as identifier delimiters. Frappe field names
+    do not contain spaces, so a double-quoted token containing whitespace on the
+    right side of a predicate is unambiguously a legacy MySQL string literal in
+    the application SQL we need to support (for example ``doctype = "HR Settings"``).
+
+    Deliberately leave identifier-shaped values such as ``"other_column"``
+    untouched because those may be real PostgreSQL identifiers.
+    """
+    literal = re.compile(
+        r'(?P<operator>=|<>|!=|<=|>=|<|>)' r'(?P<space>\s*)"(?P<value>[^"\r\n]*\s+[^"\r\n]*)"'
+    )
+
+    def replace(match):
+        value = match.group("value").replace("'", "''")
+        return f'{match.group("operator")}{match.group("space")}\'{value}\''
+
+    return literal.sub(replace, query)
+
+
+def convert_mysql_update_join(query):
+    """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
+
+    Handles the single-inner-join form emitted by Frappe Query Builder and used
+    by application migration patches. More complex multi-join UPDATE statements
+    are intentionally left unchanged rather than guessed at.
+    """
+    pattern = re.compile(
+        rf'^\s*UPDATE\s+(?P<target>{_QUOTED_IDENTIFIER})\s+(?P<target_alias>"[^"]+")\s+'
+        rf'JOIN\s+(?P<joined>{_QUOTED_IDENTIFIER})\s+(?P<joined_alias>"[^"]+")\s+'
+        r'ON\s+(?P<join_condition>.+?)\s+SET\s+(?P<set_clause>.+?)\s+WHERE\s+(?P<where_clause>.+?)\s*;?\s*$',
+        re.IGNORECASE | re.DOTALL,
+    )
+    match = pattern.match(query)
+    if not match or re.search(r"\bJOIN\b", match.group("join_condition"), re.IGNORECASE):
+        return query
+
+    target_alias = match.group("target_alias")
+    set_clause = re.sub(
+        r'(?<![\w"])' + re.escape(target_alias) + r'\.',
+        '',
+        match.group("set_clause"),
+    )
+    return (
+        f'UPDATE {match.group("target")} AS {target_alias} '
+        f'SET {set_clause} FROM {match.group("joined")} AS {match.group("joined_alias")} '
+        f'WHERE {match.group("join_condition")} AND {match.group("where_clause")}'
+    )
+
+
 def apply_all_query_transformations(query):
     """
     Apply all query transformations in the correct order.
@@ -271,6 +363,9 @@ def apply_all_query_transformations(query):
     2. Convert IF() to CASE WHEN (complex, must be done before other conversions)
     3. Convert IFNULL to COALESCE (simple replacement)
     4. Convert DATE_FORMAT to TO_CHAR (simple replacement)
+    5. Convert MySQL numeric truthiness in boolean predicates
+    6. Convert unambiguous double-quoted string literals
+    7. Convert simple MySQL UPDATE ... JOIN statements
 
     Args:
         query: SQL query string
@@ -292,10 +387,14 @@ def apply_all_query_transformations(query):
     query = convert_if_to_case(query)
     query = convert_ifnull_to_coalesce(query)
     query = convert_date_format(query)
+    query = convert_numeric_truthiness(query)
+    query = convert_mysql_double_quoted_literals(query)
+    query = convert_mysql_update_join(query)
 
     # Debug: Log if IF() is still present after transformation
     if 'IF(' in query.upper():
         import re
+
         print("\n" + "=" * 80)
         print("⚠️  WARNING: IF() still present after transformation!")
         print("=" * 80)
@@ -313,7 +412,7 @@ def apply_all_query_transformations(query):
             first_if = if_positions[0]
             context_start = max(0, first_if - 50)
             context_end = min(len(query), first_if + 100)
-            print(f"\nFirst unconverted IF() context:")
+            print("\nFirst unconverted IF() context:")
             print(f"...{query[context_start:context_end]}...")
         print("=" * 80 + "\n")
 

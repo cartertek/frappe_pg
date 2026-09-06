@@ -46,6 +46,9 @@ def apply_postgres_fixes():
     print("  • IF() → CASE WHEN conversion")
     print("  • IFNULL() → COALESCE() conversion")
     print("  • DATE_FORMAT() → TO_CHAR() conversion")
+    print("  • Numeric truthiness → explicit boolean comparison")
+    print("  • Unambiguous double-quoted MySQL string literals → SQL strings")
+    print("  • Simple UPDATE ... JOIN → PostgreSQL UPDATE ... FROM")
     print("=" * 60)
 
 
