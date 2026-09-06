@@ -94,6 +94,14 @@ class TestQueryTransformers(unittest.TestCase):
         expected = 'SELECT * FROM "tabSingles" WHERE doctype = \'HR Settings\' AND field = \'x\''
         self.assertEqual(convert_mysql_double_quoted_literals(query), expected)
 
+    def test_double_quoted_qualified_identifier_with_spaces_is_unchanged(self):
+        query = (
+            'SELECT "tabWeb Page"."route" FROM "tabWeb Page" '
+            'LEFT JOIN "tabWeb Page Block" ON '
+            '"tabWeb Page Block"."parent"="tabWeb Page"."name"'
+        )
+        self.assertEqual(convert_mysql_double_quoted_literals(query), query)
+
     def test_double_quoted_identifier_rhs_is_not_rewritten(self):
         query = 'SELECT * FROM "tabEmployee Advance" WHERE "paid_amount" = "return_amount"'
         self.assertEqual(convert_mysql_double_quoted_literals(query), query)
