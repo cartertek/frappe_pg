@@ -47,12 +47,12 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.14'
+          python-version: '3.10'
 
       - name: Setup Node
         uses: actions/setup-node@v3
         with:
-          node-version: 24
+          node-version: 18
           check-latest: true
 
       - name: Cache pip
@@ -79,10 +79,17 @@ jobs:
       - name: Install MariaDB Client
         run: sudo apt-get install mariadb-client
 
+      - name: Prepare original Frappe baseline
+        run: |
+          git init /tmp/frappe-original
+          git -C /tmp/frappe-original remote add origin https://github.com/frappe/frappe.git
+          git -C /tmp/frappe-original fetch --depth 1 origin d9d231feb8f455b4f59280dd40da50d0eb2b3353
+          git -C /tmp/frappe-original checkout -b ci-original FETCH_HEAD
+
       - name: Setup
         run: |
           pip install frappe-bench
-          bench init --frappe-branch v16.33.0 --skip-redis-config-generation --skip-assets --python "$(which python)" ~/frappe-bench
+          bench init --frappe-path file:///tmp/frappe-original --frappe-branch ci-original --skip-redis-config-generation --skip-assets --python "$(which python)" ~/frappe-bench
           mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL character_set_server = 'utf8mb4'"
           mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL collation_server = 'utf8mb4_unicode_ci'"
 
@@ -109,7 +116,17 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-    name: PostgreSQL / Frappe v16
+      matrix:
+        include:
+          - frappe: version-15
+            label: v15
+            python: '3.10'
+            node: 18
+          - frappe: v16.33.0
+            label: v16.33.0
+            python: '3.14'
+            node: 24
+    name: PostgreSQL / Frappe ${{ matrix.label }}
 
     services:
       redis-cache:
@@ -139,12 +156,12 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.14'
+          python-version: ${{ matrix.python }}
 
       - name: Setup Node
         uses: actions/setup-node@v3
         with:
-          node-version: 24
+          node-version: ${{ matrix.node }}
           check-latest: true
 
       - name: Cache pip
@@ -156,11 +173,11 @@ jobs:
             ${{ runner.os }}-pip-
             ${{ runner.os }}-
 
-      - name: Setup Frappe v16
+      - name: Setup Frappe
         run: |
           pip install frappe-bench
           bench init \
-            --frappe-branch v16.33.0 \
+            --frappe-branch "${{ matrix.frappe }}" \
             --skip-redis-config-generation \
             --skip-assets \
             --python "$(which python)" \
