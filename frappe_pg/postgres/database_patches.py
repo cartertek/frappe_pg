@@ -14,6 +14,7 @@ from .db_functions import create_missing_functions
 from .query_transformers import apply_all_query_transformations
 
 _original_transform_query = None
+_original_is_deadlocked = None
 _patches_applied = False
 
 
@@ -23,9 +24,14 @@ def patched_transform_query(self, query, values):
     return apply_all_query_transformations(query), values
 
 
+def patched_is_deadlocked(exc):
+    """Treat PostgreSQL serialization failures as retriable transaction conflicts."""
+    return getattr(exc, "pgcode", None) == "40001" or _original_is_deadlocked(exc)
+
+
 def apply_postgres_fixes():
     """Install the query transformation hook once per process."""
-    global _original_transform_query, _patches_applied
+    global _original_transform_query, _original_is_deadlocked, _patches_applied
 
     if _patches_applied:
         return
@@ -35,10 +41,13 @@ def apply_postgres_fixes():
     print("=" * 60)
 
     _original_transform_query = PostgresDatabase._transform_query
+    _original_is_deadlocked = PostgresDatabase.is_deadlocked
     PostgresDatabase._transform_query = patched_transform_query  # nosemgrep
+    PostgresDatabase.is_deadlocked = staticmethod(patched_is_deadlocked)  # nosemgrep
     _patches_applied = True
 
     print("✓ Query transformation hook applied")
+    print("✓ PostgreSQL serialization failures classified as retriable conflicts")
     print("✓ Frappe SQL and transaction methods left unchanged")
     print()
     print("The following transformations are now active:")
@@ -61,6 +70,8 @@ def remove_postgres_fixes():
 
     if PostgresDatabase._transform_query == patched_transform_query:
         PostgresDatabase._transform_query = _original_transform_query  # nosemgrep
+    if PostgresDatabase.is_deadlocked == patched_is_deadlocked:
+        PostgresDatabase.is_deadlocked = staticmethod(_original_is_deadlocked)  # nosemgrep
 
     _patches_applied = False
 

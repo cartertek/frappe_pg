@@ -181,6 +181,24 @@ class TestTransformQueryHook(unittest.TestCase):
         self.assertNotEqual(PostgresDatabase._transform_query.__module__, PostgresDatabase.sql.__module__)
         self.assertIs(PostgresDatabase._transform_query, database_patches.patched_transform_query)
 
+    def test_postgres_serialization_failure_is_classified_as_deadlock(self):
+        class SerializationFailure(Exception):
+            pgcode = "40001"
+
+        self.assertTrue(PostgresDatabase.is_deadlocked(SerializationFailure()))
+
+    def test_existing_deadlock_classification_is_preserved(self):
+        class DeadlockDetected(Exception):
+            pgcode = "40P01"
+
+        self.assertTrue(PostgresDatabase.is_deadlocked(DeadlockDetected()))
+
+    def test_unrelated_postgres_error_is_not_classified_as_deadlock(self):
+        class UniqueViolation(Exception):
+            pgcode = "23505"
+
+        self.assertFalse(PostgresDatabase.is_deadlocked(UniqueViolation()))
+
     def test_native_sql_default_still_uses_empty_query_values(self):
         default = inspect.signature(PostgresDatabase.sql).parameters["values"].default
         self.assertEqual(default, EmptyQueryValues)
@@ -252,6 +270,7 @@ class TestTransformQueryHook(unittest.TestCase):
     def test_patch_can_be_safely_removed_and_reapplied(self):
         database_patches.remove_postgres_fixes()
         self.assertIsNot(PostgresDatabase._transform_query, database_patches.patched_transform_query)
+        self.assertIsNot(PostgresDatabase.is_deadlocked, database_patches.patched_is_deadlocked)
         database_patches.apply_postgres_fixes()
         self.assertIs(PostgresDatabase._transform_query, database_patches.patched_transform_query)
         db = object.__new__(PostgresDatabase)
