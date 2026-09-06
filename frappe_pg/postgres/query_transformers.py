@@ -314,7 +314,7 @@ def convert_mysql_double_quoted_literals(query):
     untouched because those may be real PostgreSQL identifiers.
     """
     literal = re.compile(
-        r'(?P<operator>=|<>|!=|<=|>=|<|>)' r'(?P<space>\s*)"(?P<value>[^"\r\n]*\s+[^"\r\n]*)"'
+        r'(?P<operator>=|<>|!=|<=|>=|<|>)' r'(?P<space>\s*)"(?P<value>[^"\r\n]*\s+[^"\r\n]*)"' r'(?!\s*\.)'
     )
 
     def replace(match):
