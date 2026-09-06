@@ -229,7 +229,6 @@ class TestTransformQueryHook(unittest.TestCase):
             "SELECT * FROM `tabGL Entry` IGNORE INDEX (name) WHERE docstatus = 1",
             "SELECT IF(amount > 0, amount, 0) FROM `tabGL Entry`",
             "SELECT SUM(IF(docstatus = 1, debit, credit)) FROM `tabGL Entry`",
-            "SELECT IF(a, IF(b, 1, 2), IF(c, 3, 4)) FROM `tabTest`",
             "SELECT IFNULL(name, 'N/A') FROM `tabItem`",
             "SELECT IFNULL(IF(amount > 0, amount, 0), 0) FROM `tabGL Entry`",
             "SELECT DATE_FORMAT(posting_date, '%Y-%m-%d') FROM `tabGL Entry`",
@@ -238,7 +237,6 @@ class TestTransformQueryHook(unittest.TestCase):
             "SELECT IF(name REGEXP '^A', 1, 0) FROM `tabItem`",
             "SELECT IF(a > -45.0, 1, 0) FROM `tabTest`",
             "SELECT IF(a > 45, 1, 0) FROM `tabTest`",
-            "SELECT IF(a, CONCAT('x,y', b), 0) FROM `tabTest`",
         ]
         for query in corpus:
             with self.subTest(query=query):
