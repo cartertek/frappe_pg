@@ -268,20 +268,35 @@ def convert_numeric_truthiness(query):
     """Convert bare numeric identifiers in boolean predicates to PostgreSQL booleans.
 
     MariaDB accepts numeric expressions directly in ``WHERE``/``AND``/``OR``
-    predicates, treating zero as false and non-zero as true. PostgreSQL requires
+    predicates and ``CASE WHEN`` conditions, treating zero as false and non-zero as true. PostgreSQL requires
     an actual boolean expression. Frappe Query Builder can emit this shape when
     an application combines a numeric field directly with ``&``/``|``.
 
     This transformer intentionally handles only a bare quoted identifier used as
-    a boolean operand. It does not attempt to infer the type of arbitrary SQL
-    expressions.
+    a boolean predicate operand, plus a simple quoted or unquoted identifier used
+    directly between ``CASE WHEN`` and ``THEN``. It does not attempt to infer the
+    type of arbitrary SQL expressions.
     """
+    case_operand = re.compile(
+        rf'(?P<prefix>\bCASE\s+WHEN\b)'
+        rf'(?P<space>\s*)(?P<identifier>{_QUOTED_IDENTIFIER}|[A-Za-z_][A-Za-z0-9_$]*)'
+        rf'(?=(?P<trailing>\s*)\bTHEN\b)',
+        re.IGNORECASE,
+    )
     operand = re.compile(
         rf'(?P<prefix>\bWHERE\b|\bHAVING\b|\bON\b|\bAND\b|\bOR\b|\()'
         rf'(?P<space>\s*)(?P<identifier>{_QUOTED_IDENTIFIER})'
         rf'(?=(?P<trailing>\s*)(?P<suffix>\bAND\b|\bOR\b|\)|$))',
         re.IGNORECASE,
     )
+
+    def replace_case_operand(match):
+        identifier = match.group("identifier")
+        if identifier.upper() in {"TRUE", "FALSE", "NULL"}:
+            return match.group(0)
+        return f'{match.group("prefix")}{match.group("space")}({identifier} <> 0)'
+
+    query = case_operand.sub(replace_case_operand, query)
 
     def replace(match):
         # ``("name")`` is equally valid as a function/group argument and does

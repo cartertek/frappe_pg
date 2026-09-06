@@ -81,6 +81,35 @@ class TestQueryTransformers(unittest.TestCase):
         )
         self.assertEqual(convert_numeric_truthiness(nested), nested_expected)
 
+    def test_numeric_truthiness_in_case_when_from_erpnext_reserved_qty(self):
+        query = (
+            'SELECT SUM(so_item_qty - CASE WHEN dont_reserve_qty_on_return '
+            'THEN so_item_returned_qty ELSE 0 END) FROM "reserved"'
+        )
+        expected = (
+            'SELECT SUM(so_item_qty - CASE WHEN (dont_reserve_qty_on_return <> 0) '
+            'THEN so_item_returned_qty ELSE 0 END) FROM "reserved"'
+        )
+        self.assertEqual(convert_numeric_truthiness(query), expected)
+
+        mysql_if = 'SELECT IF(dont_reserve_qty_on_return, so_item_returned_qty, 0)'
+        transformed = apply_all_query_transformations(mysql_if)
+        self.assertEqual(
+            transformed,
+            'SELECT CASE WHEN (dont_reserve_qty_on_return <> 0) THEN so_item_returned_qty ELSE 0 END',
+        )
+
+    def test_numeric_truthiness_case_when_leaves_real_conditions_unchanged(self):
+        cases = [
+            'SELECT CASE WHEN amount > 0 THEN 1 ELSE 0 END',
+            'SELECT CASE WHEN TRUE THEN 1 ELSE 0 END',
+            'SELECT CASE WHEN FALSE THEN 1 ELSE 0 END',
+            'SELECT CASE WHEN COALESCE(flag, 0) THEN 1 ELSE 0 END',
+        ]
+        for query in cases:
+            with self.subTest(query=query):
+                self.assertEqual(convert_numeric_truthiness(query), query)
+
     def test_numeric_truthiness_does_not_touch_compared_identifiers(self):
         query = 'WHERE "paid_amount"="return_amount" AND "docstatus"=1'
         self.assertEqual(convert_numeric_truthiness(query), query)
