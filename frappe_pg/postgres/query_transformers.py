@@ -296,10 +296,10 @@ def convert_numeric_truthiness(query):
     # are fully normalized. Replacements are idempotent because ``<> 0`` no
     # longer matches the bare-identifier lookahead.
     while True:
-        transformed, count = operand.subn(replace, query)
-        query = transformed
-        if not count:
+        transformed = operand.sub(replace, query)
+        if transformed == query:
             return query
+        query = transformed
 
 
 def convert_mysql_double_quoted_literals(query):
