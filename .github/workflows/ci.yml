@@ -77,12 +77,12 @@ jobs:
             ${{ runner.os }}-yarn-
 
       - name: Install MariaDB Client
-        run: sudo apt-get install mariadb-client-10.6
+        run: sudo apt-get install mariadb-client
 
       - name: Setup
         run: |
           pip install frappe-bench
-          bench init --skip-redis-config-generation --skip-assets --python "$(which python)" ~/frappe-bench
+          bench init --frappe-branch version-15 --skip-redis-config-generation --skip-assets --python "$(which python)" ~/frappe-bench
           mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL character_set_server = 'utf8mb4'"
           mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL collation_server = 'utf8mb4_unicode_ci'"
 
@@ -98,6 +98,101 @@ jobs:
           CI: 'Yes'
 
       - name: Run Tests
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench --site test_site set-config allow_tests true
+          bench --site test_site run-tests --app frappe_pg
+        env:
+          TYPE: server
+
+  postgres-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - frappe: version-15
+            label: v15
+            python: '3.10'
+            node: 18
+          - frappe: v16.33.0
+            label: v16.33.0
+            python: '3.14'
+            node: 24
+    name: PostgreSQL / Frappe ${{ matrix.label }}
+
+    services:
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: true
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/*requirements.txt', '**/pyproject.toml', '**/setup.py', '**/setup.cfg') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+            ${{ runner.os }}-
+
+      - name: Setup Frappe
+        run: |
+          pip install frappe-bench
+          bench init \
+            --frappe-branch "${{ matrix.frappe }}" \
+            --skip-redis-config-generation \
+            --skip-assets \
+            --python "$(which python)" \
+            ~/frappe-bench
+
+      - name: Install app and create PostgreSQL site
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench get-app frappe_pg "$GITHUB_WORKSPACE"
+          bench setup requirements --dev
+          bench new-site test_site \
+            --db-type postgres \
+            --db-host 127.0.0.1 \
+            --db-port 5432 \
+            --db-root-username postgres \
+            --db-root-password root \
+            --admin-password admin \
+            --install-app frappe_pg
+        env:
+          CI: 'Yes'
+
+      - name: Run tests
         working-directory: /home/runner/frappe-bench
         run: |
           bench --site test_site set-config allow_tests true

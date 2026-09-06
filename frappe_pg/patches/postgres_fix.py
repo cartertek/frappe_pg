@@ -2,6 +2,12 @@
 PostgreSQL Compatibility Fixes for ERPNext
 ==========================================
 
+LEGACY NOTE: This module is retained for historical reference/backward compatibility only.
+After the _transform_query refactor, live code paths use frappe_pg.postgres.database_patches,
+frappe_pg.postgres.query_transformers, and frappe_pg.postgres.db_functions instead.
+This module is no longer imported by the active compatibility path and its monkey patches
+should not be applied.
+
 This module provides comprehensive compatibility patches for running ERPNext with PostgreSQL.
 It handles the following critical issues:
 

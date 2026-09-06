@@ -6,7 +6,7 @@ This app provides comprehensive PostgreSQL compatibility for Frappe/ERPNext.
 
 Features:
 - Automatic SQL query transformation (MySQL → PostgreSQL)
-- Transaction error handling with auto-rollback
+- Native Frappe SQL execution and transaction semantics
 - PostgreSQL compatibility functions (GROUP_CONCAT, unix_timestamp, etc.)
 - ERPNext trends report GROUP BY fixes
 

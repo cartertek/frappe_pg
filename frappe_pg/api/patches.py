@@ -106,9 +106,9 @@ def reinstall_patches():
     frappe.only_for("System Manager")
 
     try:
+        from frappe_pg.patches.v1.fix_erpnext_trends import apply_trends_patch
         from frappe_pg.postgres.database_patches import apply_postgres_fixes
         from frappe_pg.postgres.db_functions import create_missing_functions
-        from frappe_pg.patches.v1.fix_erpnext_trends import apply_trends_patch
 
         # Apply database patches
         apply_postgres_fixes()
@@ -134,7 +134,7 @@ def reinstall_patches():
         )
         return {
             "success": False,
-            "message": f"Error reinstalling patches: {str(e)}"
+            "message": f"Error reinstalling patches: {e!s}"
         }
 
 
@@ -168,7 +168,7 @@ def get_patch_info():
             "module": "frappe_pg.patches.v1.apply_postgres_compatibility",
             "description": "Apply PostgreSQL compatibility transformations and database patches",
             "features": [
-                "Query transformations (IF ’ CASE WHEN)",
+                "Query transformations (IF   CASE WHEN)",
                 "Index hint removal (FORCE INDEX)",
                 "Transaction error handling",
                 "Database method monkey patches"

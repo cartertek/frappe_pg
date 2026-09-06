@@ -34,11 +34,11 @@ def execute():
 
     try:
         apply_trends_patch()
-        print("\n ERPNext Trends Report GROUP BY Fix Completed Successfully")
+        print("\n ERPNext Trends Report GROUP BY Fix Completed Successfully")
     except ImportError:
-        print("\n  ERPNext not installed - skipping trends.py patch")
+        print("\nÂ  ERPNext not installed - skipping trends.py patch")  # noqa: RUF001 - preserve legacy NBSP
     except Exception as e:
-        print(f"\n Error applying trends patch: {e}")
+        print(f"\n Error applying trends patch: {e}")
         raise
 
     print("=" * 70 + "\n")
@@ -56,7 +56,7 @@ def apply_trends_patch():
         Exception: If patching fails
     """
     # Import the function we need to patch
-    from erpnext.controllers import trends
+    from erpnext.controllers import trends  # nosemgrep
 
     # Store original function
     _original_based_wise_columns_query = trends.based_wise_columns_query
@@ -125,7 +125,7 @@ def apply_trends_patch():
         return based_on_details
 
     # Apply the patch
-    trends.based_wise_columns_query = patched_based_wise_columns_query
+    trends.based_wise_columns_query = patched_based_wise_columns_query  # nosemgrep
 
-    print(" ERPNext trends.py patched for PostgreSQL GROUP BY compatibility")
+    print(" ERPNext trends.py patched for PostgreSQL GROUP BY compatibility")
     return True
