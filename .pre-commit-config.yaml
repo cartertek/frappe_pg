@@ -23,12 +23,15 @@ repos:
       - id: ruff
         name: "Run ruff import sorter"
         args: ["--select=I", "--fix"]
+        exclude: ^frappe_pg/patches/postgres_fix\.py$
 
       - id: ruff
         name: "Run ruff linter"
+        exclude: ^frappe_pg/patches/postgres_fix\.py$
 
       - id: ruff-format
         name: "Run ruff formatter"
+        exclude: ^frappe_pg/(?:patches/postgres_fix\.py|__init__\.py|api/patches\.py)$
 
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v2.7.1

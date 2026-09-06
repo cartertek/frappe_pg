@@ -1,6 +1,7 @@
 """
 API endpoints for frappe_pg app
 """
+
 import frappe
 
 
@@ -15,10 +16,7 @@ def reload_patches():
     remove_postgres_fixes()
     apply_postgres_fixes()
 
-    return {
-        "success": True,
-        "message": "PostgreSQL patches reloaded successfully"
-    }
+    return {"success": True, "message": "PostgreSQL patches reloaded successfully"}
 
 
 @frappe.whitelist(allow_guest=False)
@@ -26,12 +24,12 @@ def test_conversion():
     """
     Test query conversion without executing
     """
-    from frappe_pg.patches.postgres_fix import convert_if_to_case, remove_index_hints
+    from frappe_pg.postgres.query_transformers import convert_if_to_case, remove_index_hints
 
     test_queries = [
         "SELECT SUM(IF(amount > 0, amount, 0)) FROM table",
         "SELECT * FROM tabGL Entry FORCE INDEX (posting_date) WHERE date = '2024-01-01'",
-        "SELECT IFNULL(name, 'N/A') FROM tabItem"
+        "SELECT IFNULL(name, 'N/A') FROM tabItem",
     ]
 
     results = []
@@ -40,15 +38,9 @@ def test_conversion():
         transformed = remove_index_hints(transformed)
         transformed = convert_if_to_case(transformed)
 
-        results.append({
-            "original": query,
-            "transformed": transformed
-        })
+        results.append({"original": query, "transformed": transformed})
 
-    return {
-        "success": True,
-        "tests": results
-    }
+    return {"success": True, "tests": results}
 
 
 @frappe.whitelist(allow_guest=False)
@@ -67,7 +59,7 @@ def check_patches_status():
         method_info = {
             "function_name": PostgresDatabase._transform_query.__name__,
             "module": PostgresDatabase._transform_query.__module__,
-            "is_patched": is_patched
+            "is_patched": is_patched,
         }
 
         # Check database functions
@@ -90,10 +82,7 @@ def check_patches_status():
             "patches_applied": is_patched,
             "method_info": method_info,
             "database_functions": db_functions_status,
-            "db_type": type(frappe.db).__name__
+            "db_type": type(frappe.db).__name__,
         }
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}
