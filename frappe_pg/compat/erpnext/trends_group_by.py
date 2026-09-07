@@ -68,8 +68,10 @@ def is_needed():
 
 def is_applied():
     trends = _load_trends_module()
-    return trends is not None and _patched_based_wise_columns_query is not None and (
-        trends.based_wise_columns_query is _patched_based_wise_columns_query
+    return (
+        trends is not None
+        and _patched_based_wise_columns_query is not None
+        and (trends.based_wise_columns_query is _patched_based_wise_columns_query)
     )
 
 
