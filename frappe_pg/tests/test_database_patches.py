@@ -10,6 +10,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_date_format,
     convert_if_to_case,
     convert_ifnull_to_coalesce,
+    convert_mysql_date_arithmetic,
     convert_mysql_double_quoted_literals,
     convert_mysql_update_join,
     convert_numeric_truthiness,
@@ -57,6 +58,32 @@ class TestQueryTransformers(unittest.TestCase):
         for query, expected in cases.items():
             with self.subTest(query=query):
                 self.assertEqual(convert_date_format(query), expected)
+
+    def test_mysql_date_sub_curdate_from_erpnext_dashboard(self):
+        query = "transaction_date > date_sub(curdate(), interval 1 year)"
+        expected = "transaction_date > CURRENT_DATE - INTERVAL '1 year'"
+        self.assertEqual(convert_mysql_date_arithmetic(query), expected)
+
+    def test_mysql_date_arithmetic_supported_units_and_case(self):
+        cases = {
+            "DATE_SUB(posting_date, INTERVAL 30 DAY)": "posting_date - INTERVAL '30 day'",
+            "date_sub(posting_date, interval 2 WEEK)": "posting_date - INTERVAL '2 week'",
+            "DATE_SUB(posting_date, INTERVAL 3 MONTH)": "posting_date - INTERVAL '3 month'",
+            "CURDATE()": "CURRENT_DATE",
+        }
+        for query, expected in cases.items():
+            with self.subTest(query=query):
+                self.assertEqual(convert_mysql_date_arithmetic(query), expected)
+
+    def test_mysql_date_arithmetic_leaves_unsupported_shapes_unchanged(self):
+        cases = [
+            "DATE_SUB(posting_date, INTERVAL amount DAY)",
+            "DATE_SUB(posting_date, INTERVAL 1 HOUR)",
+            "DATE_SUB(COALESCE(posting_date, creation), INTERVAL 1 YEAR)",
+        ]
+        for query in cases:
+            with self.subTest(query=query):
+                self.assertEqual(convert_mysql_date_arithmetic(query), query)
 
     def test_numeric_truthiness_from_hrms_employee_advance_patch(self):
         query = (
