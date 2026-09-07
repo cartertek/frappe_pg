@@ -29,10 +29,11 @@ except Exception as e:
     # During installation, frappe might not be fully initialized
     print(f"frappe_pg: Will apply database patches later: {e}")
 
-# Apply ERPNext trends.py patch for GROUP BY compatibility
+# Apply application-level PostgreSQL compatibility overrides.
 try:
-    from frappe_pg.patches.v1.fix_erpnext_trends import apply_trends_patch
-    apply_trends_patch()
+    from frappe_pg.compat import apply_compatibility_overrides
+
+    apply_compatibility_overrides()
 except Exception as e:
-    # ERPNext might not be installed or available yet
-    print(f"frappe_pg: Will apply trends patch later: {e}")
+    # Frappe/ERPNext might not be fully available yet during installation.
+    print(f"frappe_pg: Will apply compatibility overrides later: {e}")
