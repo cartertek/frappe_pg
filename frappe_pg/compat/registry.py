@@ -1,8 +1,9 @@
 """Registry for narrowly scoped application-level PostgreSQL compatibility overrides."""
 
 from frappe_pg.compat.erpnext import trends_group_by
+from frappe_pg.compat.frappe import goal_aggregation
 
-_COMPATIBILITY_OVERRIDES = (trends_group_by,)
+_COMPATIBILITY_OVERRIDES = (goal_aggregation, trends_group_by)
 
 
 def apply_compatibility_overrides():
