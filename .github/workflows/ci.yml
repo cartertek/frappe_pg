@@ -306,6 +306,7 @@ jobs:
         image: rnwood/smtp4dev:3.7.1
         ports:
           - 2525:25
+          - 3000:80
       postgres:
         image: postgres:15
         env:
@@ -332,6 +333,12 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           check-latest: true
+
+      - name: Install test system dependencies
+        run: |
+          wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y /tmp/wkhtmltox.deb
 
       - name: Cache pip
         uses: actions/cache@v4
@@ -369,6 +376,10 @@ jobs:
         run: |
           bench get-app frappe_pg "$GITHUB_WORKSPACE"
           bench setup requirements --dev
+          if [[ "${{ matrix.app }}" == "frappe" ]]; then
+            bench setup requirements --node
+            CI=Yes bench build --force --production
+          fi
           bench new-site test_site \
             --db-type postgres \
             --db-host 127.0.0.1 \
@@ -422,7 +433,8 @@ jobs:
         run: |
           bench --site test_site set-config allow_tests true
           if [[ "${{ matrix.app }}" == "frappe" ]]; then
-            env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_frappe_test_group.py" \
+            cd sites
+            ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_frappe_test_group.py" \
               --site test_site \
               --group "${{ matrix.test_group }}"
           else
@@ -430,3 +442,4 @@ jobs:
           fi
         env:
           TYPE: server
+          FRAPPE_BENCH_ROOT: /home/runner/frappe-bench
