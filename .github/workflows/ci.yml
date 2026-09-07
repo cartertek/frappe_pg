@@ -209,16 +209,10 @@ jobs:
         include:
           - frappe: version-15
             app: frappe
-            label: Frappe v15 / remainder 1 of 2
+            label: Frappe v15 / remainder
             python: '3.10'
             node: 18
-            test_group: remainder-1
-          - frappe: version-15
-            app: frappe
-            label: Frappe v15 / remainder 2 of 2
-            python: '3.10'
-            node: 18
-            test_group: remainder-2
+            test_group: remainder
           - frappe: version-15
             app: frappe
             label: Frappe v15 / webhook
@@ -257,16 +251,10 @@ jobs:
             node: 18
           - frappe: version-16
             app: frappe
-            label: Frappe v16 / remainder 1 of 2
+            label: Frappe v16 / remainder
             python: '3.14'
             node: 24
-            test_group: remainder-1
-          - frappe: version-16
-            app: frappe
-            label: Frappe v16 / remainder 2 of 2
-            python: '3.14'
-            node: 24
-            test_group: remainder-2
+            test_group: remainder
           - frappe: version-16
             app: frappe
             label: Frappe v16 / webhook
