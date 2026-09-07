@@ -209,28 +209,40 @@ jobs:
         include:
           - frappe: version-15
             app: frappe
-            label: Frappe v15 / shard 1 of 4
+            label: Frappe v15 / remainder 1 of 2
             python: '3.10'
             node: 18
-            shard: 1
+            test_group: remainder-1
           - frappe: version-15
             app: frappe
-            label: Frappe v15 / shard 2 of 4
+            label: Frappe v15 / remainder 2 of 2
             python: '3.10'
             node: 18
-            shard: 2
+            test_group: remainder-2
           - frappe: version-15
             app: frappe
-            label: Frappe v15 / shard 3 of 4
+            label: Frappe v15 / webhook
             python: '3.10'
             node: 18
-            shard: 3
+            test_group: webhook
           - frappe: version-15
             app: frappe
-            label: Frappe v15 / shard 4 of 4
+            label: Frappe v15 / rq
             python: '3.10'
             node: 18
-            shard: 4
+            test_group: rq
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / permissions
+            python: '3.10'
+            node: 18
+            test_group: permissions
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / db query
+            python: '3.10'
+            node: 18
+            test_group: db-query
           - frappe: version-15
             app: erpnext
             app_branch: version-15
@@ -245,28 +257,40 @@ jobs:
             node: 18
           - frappe: version-16
             app: frappe
-            label: Frappe v16 / shard 1 of 4
+            label: Frappe v16 / remainder 1 of 2
             python: '3.14'
             node: 24
-            shard: 1
+            test_group: remainder-1
           - frappe: version-16
             app: frappe
-            label: Frappe v16 / shard 2 of 4
+            label: Frappe v16 / remainder 2 of 2
             python: '3.14'
             node: 24
-            shard: 2
+            test_group: remainder-2
           - frappe: version-16
             app: frappe
-            label: Frappe v16 / shard 3 of 4
+            label: Frappe v16 / webhook
             python: '3.14'
             node: 24
-            shard: 3
+            test_group: webhook
           - frappe: version-16
             app: frappe
-            label: Frappe v16 / shard 4 of 4
+            label: Frappe v16 / rq
             python: '3.14'
             node: 24
-            shard: 4
+            test_group: rq
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / permissions
+            python: '3.14'
+            node: 24
+            test_group: permissions
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / db query
+            python: '3.14'
+            node: 24
+            test_group: db-query
           - frappe: version-16
             app: erpnext
             app_branch: version-16
@@ -410,10 +434,9 @@ jobs:
         run: |
           bench --site test_site set-config allow_tests true
           if [[ "${{ matrix.app }}" == "frappe" ]]; then
-            bench --site test_site run-parallel-tests \
-              --app frappe \
-              --total-builds 4 \
-              --build-number "${{ matrix.shard }}"
+            env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_frappe_test_group.py" \
+              --site test_site \
+              --group "${{ matrix.test_group }}"
           else
             bench --site test_site run-tests --app "${{ matrix.app }}"
           fi
