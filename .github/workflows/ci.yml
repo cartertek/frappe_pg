@@ -206,42 +206,56 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        target:
+          - frappe-v15
+          - erpnext-v15
+          - hrms-v15
+          - frappe-v16
+          - erpnext-v16
+          - hrms-v16
+        shard: [1, 2, 3, 4]
         include:
-          - frappe: version-15
+          - target: frappe-v15
+            frappe: version-15
             app: frappe
             label: Frappe v15
             python: '3.10'
             node: 18
-          - frappe: version-15
+          - target: erpnext-v15
+            frappe: version-15
             app: erpnext
             app_branch: version-15
             label: ERPNext v15
             python: '3.10'
             node: 18
-          - frappe: version-15
+          - target: hrms-v15
+            frappe: version-15
             app: hrms
             app_branch: version-15
             label: HRMS v15
             python: '3.10'
             node: 18
-          - frappe: version-16
+          - target: frappe-v16
+            frappe: version-16
             app: frappe
             label: Frappe v16
             python: '3.14'
             node: 24
-          - frappe: version-16
+          - target: erpnext-v16
+            frappe: version-16
             app: erpnext
             app_branch: version-16
             label: ERPNext v16
             python: '3.14'
             node: 24
-          - frappe: version-16
+          - target: hrms-v16
+            frappe: version-16
             app: hrms
             app_branch: version-16
             label: HRMS v16
             python: '3.14'
             node: 24
-    name: PostgreSQL upstream / ${{ matrix.label }}
+    name: PostgreSQL upstream / ${{ matrix.label }} / shard ${{ matrix.shard }} of 4
 
     services:
       redis-cache:
@@ -337,6 +351,9 @@ jobs:
         working-directory: /home/runner/frappe-bench
         run: |
           bench --site test_site set-config allow_tests true
-          bench --site test_site run-tests --app "${{ matrix.app }}"
+          bench --site test_site run-parallel-tests \
+            --app "${{ matrix.app }}" \
+            --total-builds 4 \
+            --build-number "${{ matrix.shard }}"
         env:
           TYPE: server
