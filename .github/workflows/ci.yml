@@ -199,3 +199,144 @@ jobs:
           bench --site test_site run-tests --app frappe_pg
         env:
           TYPE: server
+
+
+  upstream-postgres-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15
+            python: '3.10'
+            node: 18
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15
+            python: '3.10'
+            node: 18
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15
+            python: '3.10'
+            node: 18
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16
+            python: '3.14'
+            node: 24
+          - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16
+            python: '3.14'
+            node: 24
+          - frappe: version-16
+            app: hrms
+            app_branch: version-16
+            label: HRMS v16
+            python: '3.14'
+            node: 24
+    name: PostgreSQL upstream / ${{ matrix.label }}
+
+    services:
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: true
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-upstream-${{ matrix.app }}-${{ matrix.frappe }}-${{ hashFiles('**/*requirements.txt', '**/pyproject.toml', '**/setup.py', '**/setup.cfg') }}
+          restore-keys: |
+            ${{ runner.os }}-upstream-${{ matrix.app }}-${{ matrix.frappe }}-
+            ${{ runner.os }}-upstream-
+            ${{ runner.os }}-pip-
+
+      - name: Setup Frappe
+        run: |
+          pip install frappe-bench
+          bench init \
+            --frappe-branch "${{ matrix.frappe }}" \
+            --skip-redis-config-generation \
+            --skip-assets \
+            --python "$(which python)" \
+            ~/frappe-bench
+
+      - name: Fetch application dependencies
+        if: matrix.app != 'frappe'
+        working-directory: /home/runner/frappe-bench
+        run: |
+          if [[ "${{ matrix.app }}" == "hrms" ]]; then
+            bench get-app --branch "${{ matrix.app_branch }}" erpnext https://github.com/frappe/erpnext.git
+            bench get-app --branch "${{ matrix.app_branch }}" hrms https://github.com/frappe/hrms.git
+          else
+            bench get-app --branch "${{ matrix.app_branch }}" erpnext https://github.com/frappe/erpnext.git
+          fi
+
+      - name: Create PostgreSQL test site
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench get-app frappe_pg "$GITHUB_WORKSPACE"
+          bench setup requirements --dev
+          bench new-site test_site \
+            --db-type postgres \
+            --db-host 127.0.0.1 \
+            --db-port 5432 \
+            --db-root-username postgres \
+            --db-root-password root \
+            --admin-password admin \
+            --install-app frappe_pg
+
+          if [[ "${{ matrix.app }}" == "erpnext" ]]; then
+            bench --site test_site install-app erpnext
+          elif [[ "${{ matrix.app }}" == "hrms" ]]; then
+            bench --site test_site install-app erpnext
+            bench --site test_site install-app hrms
+          fi
+        env:
+          CI: 'Yes'
+
+      - name: Run upstream application tests
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench --site test_site set-config allow_tests true
+          bench --site test_site run-tests --app "${{ matrix.app }}"
+        env:
+          TYPE: server
