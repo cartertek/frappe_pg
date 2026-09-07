@@ -206,56 +206,128 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - frappe-v15
-          - erpnext-v15
-          - hrms-v15
-          - frappe-v16
-          - erpnext-v16
-          - hrms-v16
-        shard: [1, 2, 3, 4]
         include:
-          - target: frappe-v15
-            frappe: version-15
+          - frappe: version-15
             app: frappe
-            label: Frappe v15
+            label: Frappe v15 / shard 1 of 8
             python: '3.10'
             node: 18
-          - target: erpnext-v15
-            frappe: version-15
+            shard: 1
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / shard 2 of 8
+            python: '3.10'
+            node: 18
+            shard: 2
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / shard 3 of 8
+            python: '3.10'
+            node: 18
+            shard: 3
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / shard 4 of 8
+            python: '3.10'
+            node: 18
+            shard: 4
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / shard 5 of 8
+            python: '3.10'
+            node: 18
+            shard: 5
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / shard 6 of 8
+            python: '3.10'
+            node: 18
+            shard: 6
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / shard 7 of 8
+            python: '3.10'
+            node: 18
+            shard: 7
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / shard 8 of 8
+            python: '3.10'
+            node: 18
+            shard: 8
+          - frappe: version-15
             app: erpnext
             app_branch: version-15
             label: ERPNext v15
             python: '3.10'
             node: 18
-          - target: hrms-v15
-            frappe: version-15
+          - frappe: version-15
             app: hrms
             app_branch: version-15
             label: HRMS v15
             python: '3.10'
             node: 18
-          - target: frappe-v16
-            frappe: version-16
+          - frappe: version-16
             app: frappe
-            label: Frappe v16
+            label: Frappe v16 / shard 1 of 8
             python: '3.14'
             node: 24
-          - target: erpnext-v16
-            frappe: version-16
+            shard: 1
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / shard 2 of 8
+            python: '3.14'
+            node: 24
+            shard: 2
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / shard 3 of 8
+            python: '3.14'
+            node: 24
+            shard: 3
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / shard 4 of 8
+            python: '3.14'
+            node: 24
+            shard: 4
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / shard 5 of 8
+            python: '3.14'
+            node: 24
+            shard: 5
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / shard 6 of 8
+            python: '3.14'
+            node: 24
+            shard: 6
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / shard 7 of 8
+            python: '3.14'
+            node: 24
+            shard: 7
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / shard 8 of 8
+            python: '3.14'
+            node: 24
+            shard: 8
+          - frappe: version-16
             app: erpnext
             app_branch: version-16
             label: ERPNext v16
             python: '3.14'
             node: 24
-          - target: hrms-v16
-            frappe: version-16
+          - frappe: version-16
             app: hrms
             app_branch: version-16
             label: HRMS v16
             python: '3.14'
             node: 24
-    name: PostgreSQL upstream / ${{ matrix.label }} / shard ${{ matrix.shard }} of 4
+    name: PostgreSQL upstream / ${{ matrix.label }}
 
     services:
       redis-cache:
@@ -351,9 +423,13 @@ jobs:
         working-directory: /home/runner/frappe-bench
         run: |
           bench --site test_site set-config allow_tests true
-          bench --site test_site run-parallel-tests \
-            --app "${{ matrix.app }}" \
-            --total-builds 4 \
-            --build-number "${{ matrix.shard }}"
+          if [[ "${{ matrix.app }}" == "frappe" ]]; then
+            bench --site test_site run-parallel-tests \
+              --app frappe \
+              --total-builds 8 \
+              --build-number "${{ matrix.shard }}"
+          else
+            bench --site test_site run-tests --app "${{ matrix.app }}"
+          fi
         env:
           TYPE: server
