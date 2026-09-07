@@ -66,3 +66,51 @@ class TestTrendsGroupByCompatibility(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGoalAggregationCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.frappe import goal_aggregation
+
+        goal_aggregation._original_get_monthly_results = None
+        goal_aggregation._patched_get_monthly_results = None
+
+    def test_detects_pre_fix_function_shape(self):
+        from frappe_pg.compat.frappe import goal_aggregation
+
+        def broken(goal_doctype, goal_field, date_col, filters, aggregation="sum"):
+            return Function(aggregation, goal_field)  # noqa: F821
+
+        def fixed(goal_doctype, goal_field, date_col, filters, aggregation="sum"):
+            return Function(aggregation, Table[goal_field])  # noqa: F821
+
+        self.assertTrue(goal_aggregation._uses_string_literal_goal_field(broken))
+        self.assertFalse(goal_aggregation._uses_string_literal_goal_field(fixed))
+
+    def test_applies_once_and_restores_original(self):
+        from frappe_pg.compat.frappe import goal_aggregation
+
+        def broken(goal_doctype, goal_field, date_col, filters, aggregation="sum"):
+            return Function(aggregation, goal_field)  # noqa: F821
+
+        goal = types.SimpleNamespace(get_monthly_results=broken)
+        with patch.object(goal_aggregation, "_load_goal_module", return_value=goal):
+            self.assertTrue(goal_aggregation.is_needed())
+            self.assertTrue(goal_aggregation.apply())
+            installed = goal.get_monthly_results
+            self.assertFalse(goal_aggregation.apply())
+            self.assertIs(goal.get_monthly_results, installed)
+            self.assertTrue(goal_aggregation.remove())
+            self.assertIs(goal.get_monthly_results, broken)
+
+    def test_fixed_upstream_is_left_untouched(self):
+        from frappe_pg.compat.frappe import goal_aggregation
+
+        def fixed(goal_doctype, goal_field, date_col, filters, aggregation="sum"):
+            return Function(aggregation, Table[goal_field])  # noqa: F821
+
+        goal = types.SimpleNamespace(get_monthly_results=fixed)
+        with patch.object(goal_aggregation, "_load_goal_module", return_value=goal):
+            self.assertFalse(goal_aggregation.is_needed())
+            self.assertFalse(goal_aggregation.apply())
+            self.assertIs(goal.get_monthly_results, fixed)
