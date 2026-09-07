@@ -264,6 +264,30 @@ def convert_date_format(query):
 _QUOTED_IDENTIFIER = r'"(?:[^"]|"")+"(?:\."(?:[^"]|"")+")*'
 
 
+def convert_mysql_date_arithmetic(query):
+    """Convert common MySQL current-date arithmetic to PostgreSQL syntax.
+
+    Handles ``CURDATE()`` and the simple ``DATE_SUB(expr, INTERVAL n unit)``
+    form used by Frappe/ERPNext. Interval units are intentionally limited to
+    day, week, month, and year, and the interval amount must be an integer.
+    """
+    date_sub = re.compile(
+        r"\bDATE_SUB\(\s*(?P<expr>[^(),]+|CURDATE\(\))\s*,\s*"
+        r"INTERVAL\s+(?P<amount>\d+)\s+(?P<unit>DAY|WEEK|MONTH|YEAR)\s*\)",
+        re.IGNORECASE,
+    )
+
+    def replace_date_sub(match):
+        expr = match.group("expr").strip()
+        if re.fullmatch(r"CURDATE\(\)", expr, re.IGNORECASE):
+            expr = "CURRENT_DATE"
+        amount = match.group("amount")
+        unit = match.group("unit").lower()
+        return f"{expr} - INTERVAL '{amount} {unit}'"
+
+    query = date_sub.sub(replace_date_sub, query)
+    return re.sub(r"\bCURDATE\(\)", "CURRENT_DATE", query, flags=re.IGNORECASE)
+
 def convert_numeric_truthiness(query):
     """Convert bare numeric identifiers in boolean predicates to PostgreSQL booleans.
 
@@ -382,9 +406,10 @@ def apply_all_query_transformations(query):
     2. Convert IF() to CASE WHEN (complex, must be done before other conversions)
     3. Convert IFNULL to COALESCE (simple replacement)
     4. Convert DATE_FORMAT to TO_CHAR (simple replacement)
-    5. Convert MySQL numeric truthiness in boolean predicates
-    6. Convert unambiguous double-quoted string literals
-    7. Convert simple MySQL UPDATE ... JOIN statements
+    5. Convert MySQL current-date arithmetic
+    6. Convert MySQL numeric truthiness in boolean predicates
+    7. Convert unambiguous double-quoted string literals
+    8. Convert simple MySQL UPDATE ... JOIN statements
 
     Args:
         query: SQL query string
@@ -406,6 +431,7 @@ def apply_all_query_transformations(query):
     query = convert_if_to_case(query)
     query = convert_ifnull_to_coalesce(query)
     query = convert_date_format(query)
+    query = convert_mysql_date_arithmetic(query)
     query = convert_numeric_truthiness(query)
     query = convert_mysql_double_quoted_literals(query)
     query = convert_mysql_update_join(query)
