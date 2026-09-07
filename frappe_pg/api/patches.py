@@ -43,18 +43,11 @@ def check_patches_status():
         }
     }
 
-    # Check if ERPNext trends patch is applied
-    try:
-        from erpnext.controllers import trends
-        status["trends_patch"] = {
-            "applied": hasattr(trends, 'based_wise_columns_query') and
-                      'patched_based_wise_columns_query' in str(trends.based_wise_columns_query)
-        }
-    except ImportError:
-        status["trends_patch"] = {
-            "applied": False,
-            "reason": "ERPNext not installed"
-        }
+    from frappe_pg.compat import get_compatibility_status
+
+    compatibility = get_compatibility_status()
+    status["compatibility_overrides"] = compatibility
+    status["trends_patch"] = compatibility["erpnext_trends_group_by"]
 
     return status
 
@@ -106,7 +99,7 @@ def reinstall_patches():
     frappe.only_for("System Manager")
 
     try:
-        from frappe_pg.patches.v1.fix_erpnext_trends import apply_trends_patch
+        from frappe_pg.compat import apply_compatibility_overrides
         from frappe_pg.postgres.database_patches import apply_postgres_fixes
         from frappe_pg.postgres.db_functions import create_missing_functions
 
@@ -116,11 +109,8 @@ def reinstall_patches():
         # Create database functions
         create_missing_functions()
 
-        # Apply trends patch
-        try:
-            apply_trends_patch()
-        except ImportError:
-            pass  # ERPNext not installed
+        # Apply application-level compatibility overrides.
+        apply_compatibility_overrides()
 
         return {
             "success": True,
@@ -177,7 +167,7 @@ def get_patch_info():
         {
             "name": "fix_erpnext_trends",
             "version": "1.0.0",
-            "module": "frappe_pg.patches.v1.fix_erpnext_trends",
+            "module": "frappe_pg.compat.erpnext.trends_group_by",
             "description": "Fix ERPNext trends.py GROUP BY issues for PostgreSQL strictness",
             "features": [
                 "Item-based GROUP BY fix",
