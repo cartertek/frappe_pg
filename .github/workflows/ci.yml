@@ -209,52 +209,28 @@ jobs:
         include:
           - frappe: version-15
             app: frappe
-            label: Frappe v15 / shard 1 of 8
+            label: Frappe v15 / shard 1 of 4
             python: '3.10'
             node: 18
             shard: 1
           - frappe: version-15
             app: frappe
-            label: Frappe v15 / shard 2 of 8
+            label: Frappe v15 / shard 2 of 4
             python: '3.10'
             node: 18
             shard: 2
           - frappe: version-15
             app: frappe
-            label: Frappe v15 / shard 3 of 8
+            label: Frappe v15 / shard 3 of 4
             python: '3.10'
             node: 18
             shard: 3
           - frappe: version-15
             app: frappe
-            label: Frappe v15 / shard 4 of 8
+            label: Frappe v15 / shard 4 of 4
             python: '3.10'
             node: 18
             shard: 4
-          - frappe: version-15
-            app: frappe
-            label: Frappe v15 / shard 5 of 8
-            python: '3.10'
-            node: 18
-            shard: 5
-          - frappe: version-15
-            app: frappe
-            label: Frappe v15 / shard 6 of 8
-            python: '3.10'
-            node: 18
-            shard: 6
-          - frappe: version-15
-            app: frappe
-            label: Frappe v15 / shard 7 of 8
-            python: '3.10'
-            node: 18
-            shard: 7
-          - frappe: version-15
-            app: frappe
-            label: Frappe v15 / shard 8 of 8
-            python: '3.10'
-            node: 18
-            shard: 8
           - frappe: version-15
             app: erpnext
             app_branch: version-15
@@ -269,52 +245,28 @@ jobs:
             node: 18
           - frappe: version-16
             app: frappe
-            label: Frappe v16 / shard 1 of 8
+            label: Frappe v16 / shard 1 of 4
             python: '3.14'
             node: 24
             shard: 1
           - frappe: version-16
             app: frappe
-            label: Frappe v16 / shard 2 of 8
+            label: Frappe v16 / shard 2 of 4
             python: '3.14'
             node: 24
             shard: 2
           - frappe: version-16
             app: frappe
-            label: Frappe v16 / shard 3 of 8
+            label: Frappe v16 / shard 3 of 4
             python: '3.14'
             node: 24
             shard: 3
           - frappe: version-16
             app: frappe
-            label: Frappe v16 / shard 4 of 8
+            label: Frappe v16 / shard 4 of 4
             python: '3.14'
             node: 24
             shard: 4
-          - frappe: version-16
-            app: frappe
-            label: Frappe v16 / shard 5 of 8
-            python: '3.14'
-            node: 24
-            shard: 5
-          - frappe: version-16
-            app: frappe
-            label: Frappe v16 / shard 6 of 8
-            python: '3.14'
-            node: 24
-            shard: 6
-          - frappe: version-16
-            app: frappe
-            label: Frappe v16 / shard 7 of 8
-            python: '3.14'
-            node: 24
-            shard: 7
-          - frappe: version-16
-            app: frappe
-            label: Frappe v16 / shard 8 of 8
-            python: '3.14'
-            node: 24
-            shard: 8
           - frappe: version-16
             app: erpnext
             app_branch: version-16
@@ -338,6 +290,10 @@ jobs:
         image: redis:alpine
         ports:
           - 11000:6379
+      smtp-server:
+        image: rnwood/smtp4dev:3.7.1
+        ports:
+          - 2525:25
       postgres:
         image: postgres:15
         env:
@@ -416,8 +372,38 @@ jobs:
             bench --site test_site install-app erpnext
             bench --site test_site install-app hrms
           fi
+
+          bench --site test_site set-config allow_tests 1 --parse
+          bench --site test_site set-config server_script_enabled 1 --parse
+          bench --site test_site set-config host_name "http://test_site:8000"
+          bench --site test_site set-config auto_email_id "test@example.com"
+          bench --site test_site set-config mail_server localhost
+          bench --site test_site set-config mail_port 2525 --parse
+          bench --site test_site set-config mail_login "test@example.com"
+          bench --site test_site set-config mail_password test
+          bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
+
+          # Redis is provided by Actions services. Keep the web and worker
+          # processes that upstream Frappe's server-test setup starts.
+          sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
         env:
           CI: 'Yes'
+
+      - name: Start Frappe services
+        working-directory: /home/runner/frappe-bench
+        run: |
+          echo "127.0.0.1 test_site" | sudo tee -a /etc/hosts
+          bench start > "$GITHUB_WORKSPACE/bench_start.log" 2>&1 &
+
+          for _ in {1..30}; do
+            if curl --fail --silent --output /dev/null http://test_site:8000; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          cat "$GITHUB_WORKSPACE/bench_start.log"
+          exit 1
 
       - name: Run upstream application tests
         working-directory: /home/runner/frappe-bench
@@ -426,7 +412,7 @@ jobs:
           if [[ "${{ matrix.app }}" == "frappe" ]]; then
             bench --site test_site run-parallel-tests \
               --app frappe \
-              --total-builds 8 \
+              --total-builds 4 \
               --build-number "${{ matrix.shard }}"
           else
             bench --site test_site run-tests --app "${{ matrix.app }}"
