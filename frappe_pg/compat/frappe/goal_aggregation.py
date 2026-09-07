@@ -30,7 +30,11 @@ def _uses_string_literal_goal_field(function):
         return False
 
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id != "Function":
+        if (
+            not isinstance(node, ast.Call)
+            or not isinstance(node.func, ast.Name)
+            or node.func.id != "Function"
+        ):
             continue
         if len(node.args) < 2:
             continue
@@ -52,8 +56,10 @@ def is_needed():
 
 def is_applied():
     goal = _load_goal_module()
-    return goal is not None and _patched_get_monthly_results is not None and (
-        goal.get_monthly_results is _patched_get_monthly_results
+    return (
+        goal is not None
+        and _patched_get_monthly_results is not None
+        and (goal.get_monthly_results is _patched_get_monthly_results)
     )
 
 
