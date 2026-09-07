@@ -288,6 +288,7 @@ def convert_mysql_date_arithmetic(query):
     query = date_sub.sub(replace_date_sub, query)
     return re.sub(r"\bCURDATE\(\)", "CURRENT_DATE", query, flags=re.IGNORECASE)
 
+
 def convert_numeric_truthiness(query):
     """Convert bare numeric identifiers in boolean predicates to PostgreSQL booleans.
 
