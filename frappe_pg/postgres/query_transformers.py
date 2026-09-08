@@ -74,6 +74,43 @@ def split_by_comma(text):
     return parts
 
 
+def _find_top_level_keyword(text, keyword, start=0):
+    """Return the index of a SQL keyword outside strings and parentheses."""
+    depth = 0
+    quote = None
+    i = start
+    upper_keyword = keyword.upper()
+    while i < len(text):
+        char = text[i]
+        if quote:
+            if char == quote:
+                if i + 1 < len(text) and text[i + 1] == quote:
+                    i += 2
+                    continue
+                quote = None
+            i += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            i += 1
+            continue
+        if char == "(":
+            depth += 1
+            i += 1
+            continue
+        if char == ")":
+            depth = max(depth - 1, 0)
+            i += 1
+            continue
+        if depth == 0 and text[i : i + len(keyword)].upper() == upper_keyword:
+            before = text[i - 1] if i else " "
+            after = text[i + len(keyword)] if i + len(keyword) < len(text) else " "
+            if not (before.isalnum() or before == "_") and not (after.isalnum() or after == "_"):
+                return i
+        i += 1
+    return None
+
+
 # ============================================================================
 # Core Transformation Functions
 # ============================================================================
@@ -315,8 +352,7 @@ def normalize_erpnext_item_end_of_life_zero_date(query):
     field = r'(?:(?:"tabItem"|tabItem)\.)?(?:"end_of_life"|end_of_life)'
 
     coalesced = re.compile(
-        rf"COALESCE\(\s*(?P<field>{field})\s*,\s*'0000-00-00'\s*\)"
-        r"\s*=\s*'0000-00-00'",
+        rf"COALESCE\(\s*(?P<field>{field})\s*,\s*'0000-00-00'\s*\)" r"\s*=\s*'0000-00-00'",
         re.IGNORECASE,
     )
     query = coalesced.sub(lambda match: f'{match.group("field")} IS NULL', query)
@@ -401,19 +437,23 @@ def normalize_erpnext_v15_bom_group_query(query):
     that semantics only to the recognizable exploded-BOM query shape.
     """
     markers = (
-        'FROM "tabBOM Explosion Item" bom_item',
-        'JOIN "tabBOM" bom ON bom_item.parent = bom.name',
-        'JOIN "tabItem" item ON item.name = bom_item.item_code',
-        'group by item_code, stock_uom',
-        'order by idx',
-        'from "tabBOM Item" where item_code = bom_item.item_code',
+        r'\bFROM\s+"tabBOM Explosion Item"\s+bom_item\b',
+        r'\bJOIN\s+"tabBOM"\s+bom\s+ON\s+bom_item\.parent\s*=\s*bom\.name',
+        r'\bJOIN\s+"tabItem"\s+item\s+ON\s+item\.name\s*=\s*bom_item\.item_code',
+        r'\bGROUP\s+BY\s+item_code\s*,\s*stock_uom\b',
+        r'\bORDER\s+BY\s+idx\b',
+        r'\bFROM\s+"tabBOM Item"\s+WHERE\s+item_code\s*=\s*bom_item\.item_code',
     )
-    if any(marker.lower() not in query.lower() for marker in markers):
+    if any(not re.search(marker, query, re.IGNORECASE) for marker in markers):
         return query
 
-    select_match = re.search(r"\bSELECT\b(?P<select>.+?)\bFROM\b", query, re.IGNORECASE | re.DOTALL)
-    if not select_match:
+    select_start = re.search(r"\bSELECT\b", query, re.IGNORECASE)
+    if not select_start:
         return query
+    from_start = _find_top_level_keyword(query, "FROM", select_start.end())
+    if from_start is None:
+        return query
+    select_text = query[select_start.end() : from_start]
 
     aggregate_columns = {
         "bom_item.idx": "MIN(bom_item.idx) AS idx",
@@ -436,7 +476,7 @@ def normalize_erpnext_v15_bom_group_query(query):
     }
 
     transformed_items = []
-    for item in split_by_comma(select_match.group("select")):
+    for item in split_by_comma(select_text):
         stripped = item.strip()
         key = re.sub(r"\s+", " ", stripped).lower()
         replacement = aggregate_columns.get(key)
@@ -455,8 +495,10 @@ def normalize_erpnext_v15_bom_group_query(query):
             )
         transformed_items.append(stripped)
 
-    rebuilt_select = "SELECT " + ", ".join(transformed_items) + " FROM"
-    query = query[: select_match.start()] + rebuilt_select + query[select_match.end() :]
+    rebuilt_select = (
+        query[select_start.start() : select_start.end()] + " " + ", ".join(transformed_items) + " "
+    )
+    query = query[: select_start.start()] + rebuilt_select + query[from_start:]
     query = re.sub(
         r"\bGROUP\s+BY\s+item_code\s*,\s*stock_uom\b",
         "GROUP BY bom_item.item_code, item.stock_uom",
@@ -637,6 +679,27 @@ def convert_mysql_double_quoted_literals(query):
     return in_list.sub(replace_in_list, query)
 
 
+def convert_mysql_inner_join_without_condition(query):
+    """Translate MySQL INNER JOIN-without-condition into PostgreSQL CROSS JOIN.
+
+    MySQL permits ``INNER JOIN table alias`` without ``ON``/``USING`` and
+    treats it as a cross join. PostgreSQL requires a join condition for INNER
+    JOIN. Restrict this to a joined table followed directly by a clause boundary
+    so conditioned joins are never changed.
+    """
+    pattern = re.compile(
+        r'\bINNER\s+JOIN\s+(?P<table>"(?:[^"]|"")+"(?:\."(?:[^"]|"")+")*)'
+        r'(?P<alias>\s+(?:AS\s+)?[A-Za-z_][A-Za-z0-9_$]*)?'
+        r'(?P<space>\s+)(?P<next>WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT|UNION)\b',
+        re.IGNORECASE,
+    )
+
+    def replace(match):
+        return f'CROSS JOIN {match.group("table")}{match.group("alias") or ""}{match.group("space")}{match.group("next")}'
+
+    return pattern.sub(replace, query)
+
+
 def convert_mysql_update_join(query):
     """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
 
@@ -720,6 +783,7 @@ def apply_all_query_transformations(query):
     query = remove_erpnext_inventory_dimension_default_order(query)
     query = convert_numeric_truthiness(query)
     query = convert_mysql_double_quoted_literals(query)
+    query = convert_mysql_inner_join_without_condition(query)
     query = convert_mysql_update_join(query)
 
     # Debug: Log if IF() is still present after transformation

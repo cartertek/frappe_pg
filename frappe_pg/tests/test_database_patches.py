@@ -14,6 +14,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_ifnull_to_coalesce,
     convert_mysql_date_arithmetic,
     convert_mysql_double_quoted_literals,
+    convert_mysql_inner_join_without_condition,
     convert_mysql_update_join,
     convert_mysql_zero_date_sentinel,
     convert_numeric_truthiness,
@@ -184,7 +185,8 @@ class TestQueryTransformers(unittest.TestCase):
             bom_item.include_item_in_manufacturing, bom_item.description, bom_item.rate,
             bom_item.sourced_by_supplier,
             (Select idx from "tabBOM Item" where item_code = bom_item.item_code and parent = %(parent)s limit 1) as idx
-        from "tabBOM Explosion Item" bom_item
+        from
+            "tabBOM Explosion Item" bom_item
         JOIN "tabBOM" bom ON bom_item.parent = bom.name
         JOIN "tabItem" item ON item.name = bom_item.item_code
         LEFT JOIN "tabItem Default" item_default
@@ -300,6 +302,19 @@ class TestQueryTransformers(unittest.TestCase):
         query = 'SELECT * FROM "tabX" WHERE "tabX"."a" AND "tabX"."b"'
         expected = 'SELECT * FROM "tabX" WHERE ("tabX"."a" <> 0) AND ("tabX"."b" <> 0)'
         self.assertEqual(convert_numeric_truthiness(query), expected)
+
+    def test_mysql_inner_join_without_condition_becomes_cross_join(self):
+        query = """SELECT gl.party FROM "tabGL Entry" gl
+        INNER JOIN "tabSupplier" s
+        WHERE s.name = gl.party GROUP BY gl.party"""
+        expected = """SELECT gl.party FROM "tabGL Entry" gl
+        CROSS JOIN "tabSupplier" s
+        WHERE s.name = gl.party GROUP BY gl.party"""
+        self.assertEqual(convert_mysql_inner_join_without_condition(query), expected)
+
+    def test_conditioned_inner_join_is_unchanged(self):
+        query = 'SELECT * FROM "tabA" a INNER JOIN "tabB" b ON b.name=a.b WHERE a.name=%s'
+        self.assertEqual(convert_mysql_inner_join_without_condition(query), query)
 
     def test_double_quoted_mysql_string_literal_with_spaces(self):
         query = 'SELECT * FROM "tabSingles" WHERE doctype = "HR Settings" AND field = \'x\''
