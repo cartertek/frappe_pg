@@ -326,6 +326,25 @@ def convert_mysql_date_arithmetic(query):
     return re.sub(r"\bCURDATE\(\)", "CURRENT_DATE", query, flags=re.IGNORECASE)
 
 
+def convert_mysql_datediff(query):
+    """Translate simple MySQL DATEDIFF expressions to PostgreSQL date subtraction.
+
+    MySQL DATEDIFF ignores time components and returns an integer day count.
+    Cast both operands to DATE before subtraction so PostgreSQL has the same
+    semantics even when an operand is a timestamp. Complex expressions are left
+    untouched rather than parsed heuristically.
+    """
+    operand = r'(?:CURRENT_DATE|CURRENT_TIMESTAMP|NOW\(\)|(?:"[^"\r\n]+"|[A-Za-z_][A-Za-z0-9_$]*)(?:\.(?:"[^"\r\n]+"|[A-Za-z_][A-Za-z0-9_$]*))?|%\([A-Za-z_][A-Za-z0-9_]*\)s)'
+    pattern = re.compile(
+        rf'\bDATEDIFF\s*\(\s*(?P<left>{operand})\s*,\s*(?P<right>{operand})\s*\)',
+        re.IGNORECASE,
+    )
+    return pattern.sub(
+        lambda match: f'(CAST({match.group("left")} AS DATE) - CAST({match.group("right")} AS DATE))',
+        query,
+    )
+
+
 def convert_mysql_zero_date_sentinel(query):
     """Replace MySQL's zero-date lower bound when the SQL is explicitly date-shaped.
 
@@ -1222,6 +1241,7 @@ def apply_all_query_transformations(query):
     query = convert_ifnull_to_coalesce(query)
     query = convert_date_format(query)
     query = convert_mysql_date_arithmetic(query)
+    query = convert_mysql_datediff(query)
     query = convert_mysql_zero_date_sentinel(query)
     query = normalize_erpnext_item_end_of_life_zero_date(query)
     query = expand_mysql_having_alias(query)

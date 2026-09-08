@@ -15,6 +15,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_if_to_case,
     convert_ifnull_to_coalesce,
     convert_mysql_date_arithmetic,
+    convert_mysql_datediff,
     convert_mysql_double_quoted_literals,
     convert_mysql_inner_join_without_condition,
     convert_mysql_update_join,
