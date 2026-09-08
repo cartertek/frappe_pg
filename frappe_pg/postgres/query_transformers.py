@@ -316,6 +316,10 @@ def convert_mysql_double_quoted_literals(query):
     literal = re.compile(
         r'(?P<operator>=|<>|!=|<=|>=|<|>)' r'(?P<space>\s*)"(?P<value>[^"\r\n]*\s+[^"\r\n]*)"' r'(?!\s*\.)'
     )
+    like_literal = re.compile(
+        r'(?P<operator>\b(?:LIKE|NOT\s+LIKE)\b)(?P<space>\s*)"(?P<value>[^"\r\n]*%[^"\r\n]*)"',
+        re.IGNORECASE,
+    )
     in_list = re.compile(
         r'(?P<field>(?<![.\w"])[A-Za-z_][A-Za-z0-9_$]*)' r'(?P<space>\s+IN\s*\()(?P<values>[^()]*)\)',
         re.IGNORECASE,
@@ -332,7 +336,12 @@ def convert_mysql_double_quoted_literals(query):
         values = ", ".join("'" + part[1:-1].replace("'", "''") + "'" for part in parts)
         return f'{match.group("field")}{match.group("space")}{values})'
 
+    def replace_like_literal(match):
+        value = match.group("value").replace("'", "''")
+        return f"{match.group('operator')}{match.group('space')}'{value}'"
+
     query = literal.sub(replace, query)
+    query = like_literal.sub(replace_like_literal, query)
     return in_list.sub(replace_in_list, query)
 
 
