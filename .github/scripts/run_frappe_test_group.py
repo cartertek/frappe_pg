@@ -107,16 +107,19 @@ def patch_v15_command_test(module):
     test_class = getattr(module, "TestBackups", None)
     if test_class is None:
         return
-    method = test_class.test_backup_no_options
-    if getattr(method, "_frappe_pg_sleep_guard", False) or "time.sleep(1)" in inspect.getsource(method):
-        return
+    for method_name in ("test_backup_no_options", "test_backup_excluding_specific_doctypes"):
+        method = getattr(test_class, method_name, None)
+        if method is None or getattr(method, "_frappe_pg_sleep_guard", False):
+            continue
+        if "time.sleep(1)" in inspect.getsource(method):
+            continue
 
-    def guarded_test(self):
-        time.sleep(1)
-        return method(self)
+        def guarded_test(self, _method=method):
+            time.sleep(1)
+            return _method(self)
 
-    guarded_test._frappe_pg_sleep_guard = True
-    test_class.test_backup_no_options = guarded_test
+        guarded_test._frappe_pg_sleep_guard = True
+        setattr(test_class, method_name, guarded_test)
 
 
 def patch_v15_fixture_import_test(module):
