@@ -328,6 +328,40 @@ def expand_mysql_having_alias(query):
     return having.sub(replace, query, count=1)
 
 
+def remove_erpnext_inventory_dimension_default_order(query):
+    """Remove Frappe's implicit modified ordering from ERPNext's DISTINCT inventory-dimension query.
+
+    ``get_inventory_dimensions`` asks for a DISTINCT projection without an
+    explicit order. Frappe v15 injects its default ``modified DESC`` ordering,
+    which PostgreSQL rejects because ``modified`` is not part of the DISTINCT
+    projection. Restrict this rewrite to that exact ERPNext query shape so no
+    intentional ordering is discarded elsewhere.
+    """
+    if not re.search(r'\bFROM\s+"tabInventory Dimension"\b', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bSELECT\s+DISTINCT\b', query, re.IGNORECASE):
+        return query
+
+    required_projection = (
+        r'target_fieldname\s+as\s+fieldname',
+        r'"source_fieldname"',
+        r'"reference_document"\s+as\s+doctype',
+        r'"validate_negative_stock"',
+    )
+    select_match = re.search(r'\bSELECT\b(?P<select>.+?)\bFROM\b', query, re.IGNORECASE | re.DOTALL)
+    if not select_match or any(
+        not re.search(pattern, select_match.group("select"), re.IGNORECASE) for pattern in required_projection
+    ):
+        return query
+
+    return re.sub(
+        r'\s+ORDER\s+BY\s+"tabInventory Dimension"\."modified"\s+DESC\s*$',
+        '',
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
 def convert_numeric_truthiness(query):
     """Convert bare numeric identifiers in boolean predicates to PostgreSQL booleans.
 
@@ -475,9 +509,10 @@ def apply_all_query_transformations(query):
     4. Convert DATE_FORMAT to TO_CHAR (simple replacement)
     5. Convert MySQL current-date arithmetic
     6. Expand simple MySQL HAVING aliases
-    7. Convert MySQL numeric truthiness in boolean predicates
-    8. Convert unambiguous double-quoted string literals
-    9. Convert simple MySQL UPDATE ... JOIN statements
+    7. Remove ERPNext inventory-dimension implicit ordering under DISTINCT
+    8. Convert MySQL numeric truthiness in boolean predicates
+    9. Convert unambiguous double-quoted string literals
+    10. Convert simple MySQL UPDATE ... JOIN statements
 
     Args:
         query: SQL query string
@@ -501,6 +536,7 @@ def apply_all_query_transformations(query):
     query = convert_date_format(query)
     query = convert_mysql_date_arithmetic(query)
     query = expand_mysql_having_alias(query)
+    query = remove_erpnext_inventory_dimension_default_order(query)
     query = convert_numeric_truthiness(query)
     query = convert_mysql_double_quoted_literals(query)
     query = convert_mysql_update_join(query)
