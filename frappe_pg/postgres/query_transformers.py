@@ -1127,35 +1127,39 @@ def normalize_erpnext_bank_clearance_journal_query(query):
     if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
         return query
 
-    fields = (
+    fields = {
         ("tabJournal Entry", "cheque_no"),
         ("tabJournal Entry", "cheque_date"),
         ("tabJournal Entry", "posting_date"),
         ("tabJournal Entry Account", "against_account"),
         ("tabJournal Entry", "clearance_date"),
         ("tabJournal Entry Account", "account_currency"),
+    }
+    select_match = re.search(r"\bSELECT\b(?P<select>.+?)\bFROM\b", query, re.IGNORECASE | re.DOTALL)
+    if not select_match:
+        return query
+
+    transformed_items = []
+    simple_projection = re.compile(
+        r'^(?P<expr>"(?P<table>[^"]+)"\."(?P<field>[^"]+)")'
+        r'(?P<alias>\s+(?:AS\s+)?"?[A-Za-z_][A-Za-z0-9_]*"?)?$',
+        re.IGNORECASE,
     )
-    for table, field in fields:
-        pattern = re.compile(
-            rf'(?<![A-Za-z0-9_])(?P<expr>"{re.escape(table)}"\."{re.escape(field)}")'
-            rf'(?P<alias>\s+(?:AS\s+)?"[A-Za-z_][A-Za-z0-9_]*")?',
-            re.IGNORECASE,
-        )
+    for item in split_by_comma(select_match.group("select")):
+        stripped = item.strip()
+        match = simple_projection.match(stripped)
+        if match and (match.group("table"), match.group("field")) in fields:
+            transformed_items.append(f'MAX({match.group("expr")}){match.group("alias") or ""}')
+        else:
+            # Existing aggregate projections are already PostgreSQL-safe and
+            # must remain idempotent when this transformer runs repeatedly.
+            transformed_items.append(stripped)
 
-        def replace(match):
-            # Do not wrap occurrences already used inside an aggregate or predicate.
-            prefix = query[max(0, match.start() - 8) : match.start()].upper()
-            if re.search(r'(?:MAX|MIN|SUM|AVG|COUNT)\s*\($', prefix):
-                return match.group(0)
-            return f'MAX({match.group("expr")}){match.group("alias") or ""}'
-
-        # Only transform the SELECT-list occurrence before the top-level FROM.
-        select_match = re.search(r'\bSELECT\b(?P<select>.+?)\bFROM\b', query, re.IGNORECASE | re.DOTALL)
-        if not select_match:
-            return query
-        select_text = select_match.group("select")
-        transformed = pattern.sub(replace, select_text, count=1)
-        query = query[: select_match.start("select")] + transformed + query[select_match.end("select") :]
+    query = (
+        query[: select_match.start("select")]
+        + ",".join(transformed_items)
+        + query[select_match.end("select") :]
+    )
 
     query = re.sub(
         r'(?P<field>"tabJournal Entry"\."clearance_date")\s*=\s*\'0000-00-00\'',
@@ -1304,7 +1308,7 @@ def convert_mysql_timestamp_pair(query):
     this transform to simple identifiers so one-argument casts/functions are
     never confused with this MySQL extension.
     """
-    atom = r'(?:"[^"]+"\.)?"?[A-Za-z_][A-Za-z0-9_$]*"?'
+    atom = r'(?:(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)\.)?"?[A-Za-z_][A-Za-z0-9_$]*"?'
     pattern = re.compile(
         rf"\bTIMESTAMP\s*\(\s*(?P<date>{atom})\s*,\s*(?P<time>{atom})\s*\)",
         re.IGNORECASE,
