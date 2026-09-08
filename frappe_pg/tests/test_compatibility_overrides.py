@@ -385,3 +385,44 @@ class TestPostgresUniqueViolationCompatibility(unittest.TestCase):
             self.assertFalse(postgres_unique_violation.is_needed())
             self.assertFalse(postgres_unique_violation.apply())
             self.assertIs(Database.is_unique_key_violation, original)
+
+
+class TestPaymentLedgerGroupingCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import payment_ledger_grouping
+
+        payment_ledger_grouping._original_query_for_outstanding = None
+        payment_ledger_grouping._patched_query_for_outstanding = None
+
+    def test_detects_upstream_grouping_fix(self):
+        from frappe_pg.compat.erpnext import payment_ledger_grouping
+
+        def old_query(self):
+            return self.ple.voucher_type
+
+        def fixed_query(self):
+            grouped = self.ple.groupby(ple.account, ple.voucher_type)  # noqa: F821
+            representative = Min(ple.name).as_("representative")  # noqa: F821
+            representative_ple = self.qb.DocType("Payment Ledger Entry").as_("representative_ple")
+            return grouped, representative, representative_ple
+
+        self.assertFalse(payment_ledger_grouping._upstream_is_compatible(old_query))
+        self.assertTrue(payment_ledger_grouping._upstream_is_compatible(fixed_query))
+
+    def test_applies_once_and_restores_original(self):
+        from frappe_pg.compat.erpnext import payment_ledger_grouping
+
+        def old_query(self):
+            return self.ple.voucher_type
+
+        cls = types.SimpleNamespace(query_for_outstanding=old_query)
+        module = types.SimpleNamespace(QueryPaymentLedger=cls)
+        with patch.object(payment_ledger_grouping, "_load_accounts_utils", return_value=module):
+            self.assertTrue(payment_ledger_grouping.is_needed())
+            self.assertTrue(payment_ledger_grouping.apply())
+            self.assertIs(
+                cls.query_for_outstanding, payment_ledger_grouping._compatible_query_for_outstanding
+            )
+            self.assertFalse(payment_ledger_grouping.apply())
+            self.assertTrue(payment_ledger_grouping.remove())
+            self.assertIs(cls.query_for_outstanding, old_query)
