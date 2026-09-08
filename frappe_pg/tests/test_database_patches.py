@@ -180,6 +180,21 @@ class TestQueryTransformers(unittest.TestCase):
         query = 'SELECT * FROM "tabExample" WHERE "name" = "other_column"'
         self.assertEqual(convert_mysql_double_quoted_literals(query), query)
 
+    def test_double_quoted_mysql_string_literals_in_legacy_in_list(self):
+        query = (
+            'SELECT * FROM "tabSingles" WHERE field in ('
+            '"encrypt_salary_slips_in_emails", "email_salary_slip_to_employee", "password_policy")'
+        )
+        expected = (
+            'SELECT * FROM "tabSingles" WHERE field in ('
+            "'encrypt_salary_slips_in_emails', 'email_salary_slip_to_employee', 'password_policy')"
+        )
+        self.assertEqual(convert_mysql_double_quoted_literals(query), expected)
+
+    def test_quoted_identifier_in_list_is_not_rewritten(self):
+        query = 'SELECT * FROM "tabExample" WHERE "name" IN ("other_column", "another_column")'
+        self.assertEqual(convert_mysql_double_quoted_literals(query), query)
+
     def test_double_quoted_qualified_identifier_with_spaces_is_unchanged(self):
         query = (
             'SELECT "tabWeb Page"."route" FROM "tabWeb Page" '
