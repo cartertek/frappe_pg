@@ -303,6 +303,31 @@ def convert_mysql_zero_date_sentinel(query):
     return pattern.sub(r"\g<expr>\g<space>'0001-01-01 00:00:00'", query)
 
 
+def normalize_erpnext_item_end_of_life_zero_date(query):
+    """Translate ERPNext's legacy Item zero-date sentinel to PostgreSQL NULL semantics.
+
+    ERPNext uses MySQL's ``0000-00-00`` value as an alternate "no end date"
+    sentinel for ``Item.end_of_life``. PostgreSQL cannot represent that date.
+    On PostgreSQL an unset end-of-life date is NULL, so only the recognizable
+    ``end_of_life`` comparisons are normalized; unrelated zero-date literals
+    are deliberately left untouched.
+    """
+    field = r'(?:(?:"tabItem"|tabItem)\.)?(?:"end_of_life"|end_of_life)'
+
+    coalesced = re.compile(
+        rf"COALESCE\(\s*(?P<field>{field})\s*,\s*'0000-00-00'\s*\)"
+        r"\s*=\s*'0000-00-00'",
+        re.IGNORECASE,
+    )
+    query = coalesced.sub(lambda match: f'{match.group("field")} IS NULL', query)
+
+    direct = re.compile(
+        rf"(?P<field>{field})\s*=\s*'0000-00-00'",
+        re.IGNORECASE,
+    )
+    return direct.sub(lambda match: f'{match.group("field")} IS NULL', query)
+
+
 def expand_mysql_having_alias(query):
     """Expand a simple SELECT alias referenced directly by HAVING.
 
@@ -533,7 +558,7 @@ def convert_numeric_truthiness(query):
             if re.search(r"\bBETWEEN\b", tail, re.IGNORECASE):
                 return match.group(0)
 
-        return f'{match.group("prefix")}{match.group("space")}' f'({match.group("identifier")} <> 0)'
+        return f'{match.group("prefix")}{match.group("space")}({match.group("identifier")} <> 0)'
 
     # Re-run until nested shapes such as ("claimed_amount" AND "return_amount")
     # are fully normalized. Replacements are idempotent because ``<> 0`` no
@@ -639,13 +664,14 @@ def apply_all_query_transformations(query):
     4. Convert DATE_FORMAT to TO_CHAR (simple replacement)
     5. Convert MySQL current-date arithmetic
     6. Normalize explicit MySQL zero-date sentinels
-    7. Expand simple MySQL HAVING aliases
-    8. Remove irrelevant ORDER BY from aggregate-only single-row queries
-    9. Normalize ERPNext v15 exploded-BOM GROUP BY semantics
-    10. Remove ERPNext inventory-dimension implicit ordering under DISTINCT
-    11. Convert MySQL numeric truthiness in boolean predicates
-    12. Convert unambiguous double-quoted string literals
-    13. Convert simple MySQL UPDATE ... JOIN statements
+    7. Normalize ERPNext Item zero-date sentinel semantics
+    8. Expand simple MySQL HAVING aliases
+    9. Remove irrelevant ORDER BY from aggregate-only single-row queries
+    10. Normalize ERPNext v15 exploded-BOM GROUP BY semantics
+    11. Remove ERPNext inventory-dimension implicit ordering under DISTINCT
+    12. Convert MySQL numeric truthiness in boolean predicates
+    13. Convert unambiguous double-quoted string literals
+    14. Convert simple MySQL UPDATE ... JOIN statements
 
     Args:
         query: SQL query string
@@ -669,6 +695,7 @@ def apply_all_query_transformations(query):
     query = convert_date_format(query)
     query = convert_mysql_date_arithmetic(query)
     query = convert_mysql_zero_date_sentinel(query)
+    query = normalize_erpnext_item_end_of_life_zero_date(query)
     query = expand_mysql_having_alias(query)
     query = remove_order_by_from_aggregate_only_query(query)
     query = normalize_erpnext_v15_bom_group_query(query)
