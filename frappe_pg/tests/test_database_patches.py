@@ -752,6 +752,11 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
             transformed,
         )
         self.assertIn('ORDER BY MIN(bom_item.idx)', transformed)
+        self.assertIn(
+            'JOIN "tabItem" item ON item.name = bom_item.item_code GROUP BY',
+            transformed,
+        )
+        self.assertNotIn('ONGROUP', transformed)
 
     def test_double_quoted_literal_after_legacy_qualified_field(self):
         query = 'WHERE entry.purpose = "Manufacture" AND "entry"."status" = "other"."status"'

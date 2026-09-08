@@ -660,7 +660,17 @@ def normalize_erpnext_bom_items_grouping(query):
     query = query[: select_start.start()] + rebuilt_select + query[from_start:]
 
     group_by = "GROUP BY " + ", ".join(group_keys)
-    query = query[: group_match.start()] + group_by + query[group_match.end() :]
+    # Re-locate the clause after rebuilding SELECT: aggregation changes the
+    # query length, so offsets captured from the original SQL are stale here.
+    updated_group_match = re.search(
+        r"\bGROUP\s+BY\s+[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*"
+        r"(?=\s+ORDER\s+BY\b|\s*$)",
+        query,
+        re.IGNORECASE,
+    )
+    if not updated_group_match:
+        return query
+    query = query[: updated_group_match.start()] + group_by + query[updated_group_match.end() :]
     return re.sub(
         r"\bORDER\s+BY\s+idx\b",
         "ORDER BY MIN(bom_item.idx)",
