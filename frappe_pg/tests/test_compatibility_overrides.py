@@ -1,6 +1,6 @@
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from frappe_pg.compat.erpnext import trends_group_by
 
@@ -114,3 +114,139 @@ class TestGoalAggregationCompatibility(unittest.TestCase):
             self.assertFalse(goal_aggregation.is_needed())
             self.assertFalse(goal_aggregation.apply())
             self.assertIs(goal.get_monthly_results, fixed)
+
+
+class TestSchemaTypeConversionCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.frappe import schema_type_conversion
+
+        schema_type_conversion._original_alter = None
+        schema_type_conversion._patched_alter = None
+
+    def test_detects_native_incompatible_values_handling(self):
+        from frappe_pg.compat.frappe import schema_type_conversion
+
+        def old_alter(self):
+            return self.query()
+
+        def new_alter(self):
+            if frappe.db.is_data_truncated(Exception()):  # noqa: F821
+                return "Incompatible Values"
+
+        self.assertFalse(schema_type_conversion._upstream_handles_incompatible_values(old_alter))
+        self.assertTrue(schema_type_conversion._upstream_handles_incompatible_values(new_alter))
+
+    def test_applies_once_maps_cast_failure_and_restores(self):
+        from frappe_pg.compat.frappe import schema_type_conversion
+
+        class CastFailure(Exception):
+            pgcode = "22P02"
+
+        def old_alter(self):
+            raise CastFailure()
+
+        table = types.SimpleNamespace(alter=old_alter)
+        schema = types.SimpleNamespace(doctype="Example")
+        with (
+            patch.object(schema_type_conversion, "_load_postgres_table", return_value=table),
+            patch("frappe.throw", side_effect=__import__("frappe").ValidationError("incompatible")),
+        ):
+            self.assertTrue(schema_type_conversion.is_needed())
+            self.assertTrue(schema_type_conversion.apply())
+            installed = table.alter
+            self.assertFalse(schema_type_conversion.apply())
+            self.assertIs(table.alter, installed)
+            with self.assertRaises(__import__("frappe").ValidationError):
+                installed(schema)
+            self.assertTrue(schema_type_conversion.remove())
+            self.assertIs(table.alter, old_alter)
+
+    def test_unrelated_schema_error_is_preserved(self):
+        from frappe_pg.compat.frappe import schema_type_conversion
+
+        class OtherFailure(Exception):
+            pgcode = "99999"
+
+        def old_alter(self):
+            raise OtherFailure()
+
+        table = types.SimpleNamespace(alter=old_alter)
+        with patch.object(schema_type_conversion, "_load_postgres_table", return_value=table):
+            self.assertTrue(schema_type_conversion.apply())
+            with self.assertRaises(OtherFailure):
+                table.alter(types.SimpleNamespace(doctype="Example"))
+
+
+class TestUniqueInsertTransactionCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.frappe import unique_insert_transaction
+
+        unique_insert_transaction._original_db_insert = None
+        unique_insert_transaction._patched_db_insert = None
+
+    def test_detects_native_savepoint_isolation(self):
+        from frappe_pg.compat.frappe import unique_insert_transaction
+
+        def old_insert(self):
+            return self.insert()
+
+        def isolated_insert(self):
+            frappe.db.savepoint("insert")  # noqa: F821
+            frappe.db.rollback(save_point="insert")  # noqa: F821
+
+        self.assertFalse(unique_insert_transaction._upstream_isolates_insert_failures(old_insert))
+        self.assertTrue(unique_insert_transaction._upstream_isolates_insert_failures(isolated_insert))
+
+    def test_unique_postgres_insert_uses_savepoint_and_restores(self):
+        import frappe
+
+        from frappe_pg.compat.frappe import unique_insert_transaction
+
+        failure = frappe.UniqueValidationError("duplicate")
+
+        def old_insert(self, *args, **kwargs):
+            raise failure
+
+        document = types.SimpleNamespace(db_insert=old_insert)
+        field = types.SimpleNamespace(unique=True)
+        doc = types.SimpleNamespace(meta=types.SimpleNamespace(fields=[field]))
+        fake_db = Mock(db_type="postgres")
+        with (
+            patch.object(unique_insert_transaction, "_load_base_document", return_value=document),
+            patch.object(frappe, "db", fake_db),
+        ):
+            self.assertTrue(unique_insert_transaction.apply())
+            installed = document.db_insert
+            self.assertFalse(unique_insert_transaction.apply())
+            with self.assertRaises(frappe.UniqueValidationError):
+                installed(doc)
+            fake_db.savepoint.assert_called_once()
+            fake_db.rollback.assert_called_once()
+            fake_db.release_savepoint.assert_not_called()
+            self.assertTrue(unique_insert_transaction.remove())
+            self.assertIs(document.db_insert, old_insert)
+
+    def test_ordinary_or_non_postgres_insert_has_no_savepoint(self):
+        import frappe
+
+        from frappe_pg.compat.frappe import unique_insert_transaction
+
+        def old_insert(self, *args, **kwargs):
+            return "ok"
+
+        for db_type, unique in (("postgres", False), ("mariadb", True)):
+            with self.subTest(db_type=db_type, unique=unique):
+                document = types.SimpleNamespace(db_insert=old_insert)
+                doc = types.SimpleNamespace(
+                    meta=types.SimpleNamespace(fields=[types.SimpleNamespace(unique=unique)])
+                )
+                fake_db = Mock(db_type=db_type)
+                unique_insert_transaction._original_db_insert = None
+                unique_insert_transaction._patched_db_insert = None
+                with (
+                    patch.object(unique_insert_transaction, "_load_base_document", return_value=document),
+                    patch.object(frappe, "db", fake_db),
+                ):
+                    self.assertTrue(unique_insert_transaction.apply())
+                    self.assertEqual(document.db_insert(doc), "ok")
+                    fake_db.savepoint.assert_not_called()
