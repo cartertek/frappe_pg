@@ -241,7 +241,12 @@ class TestQueryTransformers(unittest.TestCase):
 
     def test_double_quoted_mysql_like_pattern(self):
         query = 'select data from "__UserSettings" where data like "%%%s%%"'
-        expected = "select data from \"__UserSettings\" where data like '%%%s%%'"
+        expected = "select data from \"__UserSettings\" where data like '%%' || %s || '%%'"
+        self.assertEqual(convert_mysql_double_quoted_literals(query), expected)
+
+    def test_double_quoted_mysql_like_literal_without_placeholder(self):
+        query = 'select name from "tabExample" where name like "prefix%"'
+        expected = "select name from \"tabExample\" where name like 'prefix%'"
         self.assertEqual(convert_mysql_double_quoted_literals(query), expected)
 
     def test_double_quoted_mysql_string_literals_in_legacy_in_list(self):
