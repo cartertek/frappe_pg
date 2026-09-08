@@ -366,6 +366,88 @@ def remove_order_by_from_aggregate_only_query(query):
     )
 
 
+def normalize_erpnext_v15_bom_group_query(query):
+    """Make ERPNext v15's exploded-BOM aggregate query PostgreSQL-valid.
+
+    ERPNext v15 groups exploded BOM rows by item code/stock UOM while selecting
+    several functionally dependent columns and ordering by an ambiguous ``idx``
+    alias. MariaDB accepts that permissive GROUP BY shape; PostgreSQL does not.
+    ERPNext develop fixed this by qualifying/aggregating the same columns. Apply
+    that semantics only to the recognizable exploded-BOM query shape.
+    """
+    markers = (
+        'FROM "tabBOM Explosion Item" bom_item',
+        'JOIN "tabBOM" bom ON bom_item.parent = bom.name',
+        'JOIN "tabItem" item ON item.name = bom_item.item_code',
+        'group by item_code, stock_uom',
+        'order by idx',
+        'from "tabBOM Item" where item_code = bom_item.item_code',
+    )
+    if any(marker.lower() not in query.lower() for marker in markers):
+        return query
+
+    select_match = re.search(r"\bSELECT\b(?P<select>.+?)\bFROM\b", query, re.IGNORECASE | re.DOTALL)
+    if not select_match:
+        return query
+
+    aggregate_columns = {
+        "bom_item.idx": "MIN(bom_item.idx) AS idx",
+        "item.item_name": "MAX(item.item_name) AS item_name",
+        "item.image": "MAX(item.image) AS image",
+        "bom.project": "MAX(bom.project) AS project",
+        "bom_item.rate": "MAX(bom_item.rate) AS rate",
+        "item.item_group": "MAX(item.item_group) AS item_group",
+        "item.allow_alternative_item": "MAX(item.allow_alternative_item) AS allow_alternative_item",
+        "item_default.default_warehouse": "MAX(item_default.default_warehouse) AS default_warehouse",
+        "item_default.expense_account as expense_account": "MAX(item_default.expense_account) AS expense_account",
+        "item_default.buying_cost_center as cost_center": "MAX(item_default.buying_cost_center) AS cost_center",
+        "bom_item.source_warehouse": "MAX(bom_item.source_warehouse) AS source_warehouse",
+        "bom_item.operation": "MAX(bom_item.operation) AS operation",
+        "bom_item.include_item_in_manufacturing": (
+            "MAX(bom_item.include_item_in_manufacturing) AS include_item_in_manufacturing"
+        ),
+        "bom_item.description": "MAX(bom_item.description) AS description",
+        "bom_item.sourced_by_supplier": "MAX(bom_item.sourced_by_supplier) AS sourced_by_supplier",
+    }
+
+    transformed_items = []
+    for item in split_by_comma(select_match.group("select")):
+        stripped = item.strip()
+        key = re.sub(r"\s+", " ", stripped).lower()
+        replacement = aggregate_columns.get(key)
+        if replacement is not None:
+            transformed_items.append(replacement)
+            continue
+
+        if re.search(r"\bSUM\s*\(", stripped, re.IGNORECASE) and re.search(
+            r"\bbom_item\.rate\b", stripped, re.IGNORECASE
+        ):
+            stripped = re.sub(
+                r"\bbom_item\.rate\b",
+                "MAX(bom_item.rate)",
+                stripped,
+                flags=re.IGNORECASE,
+            )
+        transformed_items.append(stripped)
+
+    rebuilt_select = "SELECT " + ", ".join(transformed_items) + " FROM"
+    query = query[: select_match.start()] + rebuilt_select + query[select_match.end() :]
+    query = re.sub(
+        r"\bGROUP\s+BY\s+item_code\s*,\s*stock_uom\b",
+        "GROUP BY bom_item.item_code, item.stock_uom",
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(
+        r"\bORDER\s+BY\s+idx\b",
+        "ORDER BY MIN(bom_item.idx)",
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
 def remove_erpnext_inventory_dimension_default_order(query):
     """Remove Frappe's implicit modified ordering from ERPNext's DISTINCT inventory-dimension query.
 
@@ -577,10 +659,11 @@ def apply_all_query_transformations(query):
     6. Normalize explicit MySQL zero-date sentinels
     7. Expand simple MySQL HAVING aliases
     8. Remove irrelevant ORDER BY from aggregate-only single-row queries
-    9. Remove ERPNext inventory-dimension implicit ordering under DISTINCT
-    10. Convert MySQL numeric truthiness in boolean predicates
-    11. Convert unambiguous double-quoted string literals
-    12. Convert simple MySQL UPDATE ... JOIN statements
+    9. Normalize ERPNext v15 exploded-BOM GROUP BY semantics
+    10. Remove ERPNext inventory-dimension implicit ordering under DISTINCT
+    11. Convert MySQL numeric truthiness in boolean predicates
+    12. Convert unambiguous double-quoted string literals
+    13. Convert simple MySQL UPDATE ... JOIN statements
 
     Args:
         query: SQL query string
@@ -606,6 +689,7 @@ def apply_all_query_transformations(query):
     query = convert_mysql_zero_date_sentinel(query)
     query = expand_mysql_having_alias(query)
     query = remove_order_by_from_aggregate_only_query(query)
+    query = normalize_erpnext_v15_bom_group_query(query)
     query = remove_erpnext_inventory_dimension_default_order(query)
     query = convert_numeric_truthiness(query)
     query = convert_mysql_double_quoted_literals(query)
