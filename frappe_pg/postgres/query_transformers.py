@@ -938,6 +938,75 @@ def normalize_erpnext_production_plan_subitems_grouping(query):
     )
 
 
+def normalize_erpnext_advance_payment_currency_aggregate(query):
+    """Aggregate Advance Payment Ledger currency with the summed advance amount.
+
+    ERPNext v15/v16 select ``ABS(SUM(amount)), currency`` without grouping.
+    ERPNext develop uses ``MAX(currency)`` because the filtered ledger rows all
+    represent the same account currency. Restrict the rewrite to that exact
+    Advance Payment Ledger aggregate shape.
+    """
+    if not re.search(r'\bFROM\s+"tabAdvance Payment Ledger Entry"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'ABS\s*\(\s*SUM\s*\(\s*"?amount"?\s*\)\s*\)', query, re.IGNORECASE):
+        return query
+    return re.sub(
+        r'(?<![A-Za-z0-9_.])(?P<currency>(?:"tabAdvance Payment Ledger Entry"\.)?"?currency"?)'
+        r'(?P<alias>\s+(?:AS\s+)?"?account_currency"?)',
+        lambda match: f'MAX({match.group("currency")}){match.group("alias")}',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_erpnext_stock_voucher_group_order(query):
+    """Backport ERPNext's PostgreSQL-safe stock-voucher ordering query.
+
+    Older ERPNext groups Stock Ledger Entries by voucher while selecting and
+    ordering by ungrouped posting fields. Develop selects only the voucher keys
+    used downstream and orders each group by MIN(posting_datetime/creation).
+    """
+    required = (
+        r'\bFROM\s+"tabStock Ledger Entry"',
+        r'\bGROUP\s+BY\s+"?voucher_type"?\s*,\s*"?voucher_no"?',
+        r'\bORDER\s+BY\s+"?posting_datetime"?',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+
+    select_match = re.match(
+        r'(?P<prefix>\s*SELECT\s+)(?P<select>.+?)(?P<from>\s+FROM\s+)', query, re.IGNORECASE | re.DOTALL
+    )
+    if not select_match:
+        return query
+    selected = select_match.group("select")
+    if not all(
+        re.search(rf'(?<![A-Za-z0-9_])"?{field}"?(?![A-Za-z0-9_])', selected, re.IGNORECASE)
+        for field in ("voucher_type", "voucher_no", "posting_date", "posting_time", "creation")
+    ):
+        return query
+
+    table_prefix = '"tabStock Ledger Entry".' if '"tabStock Ledger Entry".' in selected else ''
+    replacement_select = f'{table_prefix}"voucher_type",{table_prefix}"voucher_no"'
+    query = query[: select_match.start("select")] + replacement_select + query[select_match.end("select") :]
+    query = re.sub(
+        r'\bORDER\s+BY\s+(?P<field>(?:"tabStock Ledger Entry"\.)?"?posting_datetime"?)',
+        lambda match: f'ORDER BY MIN({match.group("field")})',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    query = re.sub(
+        r'(?P<comma>,\s*|\s+)ORDER\s+BY\s+(?P<field>(?:"tabStock Ledger Entry"\.)?"?creation"?)',
+        lambda match: f'{match.group("comma")}ORDER BY MIN({match.group("field")})',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    return query
+
+
 def normalize_erpnext_landed_cost_center_aggregate(query):
     """Match ERPNext's PostgreSQL-safe landed-cost aggregate.
 
@@ -1054,6 +1123,8 @@ def apply_all_query_transformations(query):
     query = normalize_hrms_shift_assignment_empty_end_date(query)
     query = normalize_hrms_skill_assessment_group_order(query)
     query = normalize_erpnext_production_plan_subitems_grouping(query)
+    query = normalize_erpnext_advance_payment_currency_aggregate(query)
+    query = normalize_erpnext_stock_voucher_group_order(query)
     query = normalize_erpnext_landed_cost_center_aggregate(query)
     query = convert_mysql_update_join(query)
 
