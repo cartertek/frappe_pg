@@ -201,7 +201,80 @@ jobs:
           TYPE: server
 
 
+  prepare-upstream-frappe:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - frappe: version-15
+            label: v15
+            python: '3.10'
+            node: 18
+            artifact: frappe-bench-v15
+          - frappe: version-16
+            label: v16
+            python: '3.14'
+            node: 24
+            artifact: frappe-bench-v16
+    name: Prepare upstream Frappe ${{ matrix.label }}
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: true
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-upstream-prep-${{ matrix.frappe }}-${{ hashFiles('**/*requirements.txt', '**/pyproject.toml', '**/setup.py', '**/setup.cfg') }}
+          restore-keys: |
+            ${{ runner.os }}-upstream-prep-${{ matrix.frappe }}-
+            ${{ runner.os }}-upstream-
+            ${{ runner.os }}-pip-
+
+      - name: Prepare Frappe bench
+        run: |
+          pip install frappe-bench
+          bench init \
+            --frappe-branch "${{ matrix.frappe }}" \
+            --skip-redis-config-generation \
+            --skip-assets \
+            --python "$(which python)" \
+            ~/frappe-bench
+          cd ~/frappe-bench
+          bench get-app frappe_pg "$GITHUB_WORKSPACE"
+          bench setup requirements --dev
+          bench setup requirements --node
+          CI=Yes bench build --force --production
+        env:
+          CI: 'Yes'
+
+      - name: Pack prepared bench
+        run: tar -C /home/runner -cf "$RUNNER_TEMP/frappe-bench.tar" frappe-bench
+
+      - name: Upload prepared bench
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/frappe-bench.tar
+          compression-level: 0
+          retention-days: 1
+
+
   upstream-postgres-tests:
+    needs: prepare-upstream-frappe
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -212,42 +285,49 @@ jobs:
             label: Frappe v15 / remainder 1
             python: '3.10'
             node: 18
+            artifact: frappe-bench-v15
             test_group: remainder-1
           - frappe: version-15
             app: frappe
             label: Frappe v15 / remainder 2
             python: '3.10'
             node: 18
+            artifact: frappe-bench-v15
             test_group: remainder-2
           - frappe: version-15
             app: frappe
             label: Frappe v15 / webhook
             python: '3.10'
             node: 18
+            artifact: frappe-bench-v15
             test_group: webhook
           - frappe: version-15
             app: frappe
             label: Frappe v15 / rq
             python: '3.10'
             node: 18
+            artifact: frappe-bench-v15
             test_group: rq
           - frappe: version-15
             app: frappe
             label: Frappe v15 / permissions
             python: '3.10'
             node: 18
+            artifact: frappe-bench-v15
             test_group: permissions
           - frappe: version-15
             app: frappe
             label: Frappe v15 / db query
             python: '3.10'
             node: 18
+            artifact: frappe-bench-v15
             test_group: db-query
           - frappe: version-15
             app: frappe
             label: Frappe v15 / commands
             python: '3.10'
             node: 18
+            artifact: frappe-bench-v15
             test_group: commands
           - frappe: version-15
             app: erpnext
@@ -255,53 +335,62 @@ jobs:
             label: ERPNext v15
             python: '3.10'
             node: 18
+            artifact: frappe-bench-v15
           - frappe: version-15
             app: hrms
             app_branch: version-15
             label: HRMS v15
             python: '3.10'
             node: 18
+            artifact: frappe-bench-v15
           - frappe: version-16
             app: frappe
             label: Frappe v16 / remainder 1
             python: '3.14'
             node: 24
+            artifact: frappe-bench-v16
             test_group: remainder-1
           - frappe: version-16
             app: frappe
             label: Frappe v16 / remainder 2
             python: '3.14'
             node: 24
+            artifact: frappe-bench-v16
             test_group: remainder-2
           - frappe: version-16
             app: frappe
             label: Frappe v16 / webhook
             python: '3.14'
             node: 24
+            artifact: frappe-bench-v16
             test_group: webhook
           - frappe: version-16
             app: frappe
             label: Frappe v16 / rq
             python: '3.14'
             node: 24
+            artifact: frappe-bench-v16
             test_group: rq
           - frappe: version-16
             app: frappe
             label: Frappe v16 / permissions
             python: '3.14'
             node: 24
+            artifact: frappe-bench-v16
             test_group: permissions
           - frappe: version-16
             app: frappe
             label: Frappe v16 / db query
             python: '3.14'
             node: 24
+            artifact: frappe-bench-v16
             test_group: db-query
           - frappe: version-16
             app: frappe
             label: Frappe v16 / commands
             python: '3.14'
             node: 24
+            artifact: frappe-bench-v16
             test_group: commands
           - frappe: version-16
             app: erpnext
@@ -309,12 +398,14 @@ jobs:
             label: ERPNext v16
             python: '3.14'
             node: 24
+            artifact: frappe-bench-v16
           - frappe: version-16
             app: hrms
             app_branch: version-16
             label: HRMS v16
             python: '3.14'
             node: 24
+            artifact: frappe-bench-v16
     name: PostgreSQL upstream / ${{ matrix.label }}
 
     services:
@@ -364,25 +455,16 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y /tmp/wkhtmltox.deb
 
-      - name: Cache pip
-        uses: actions/cache@v4
+      - name: Download prepared Frappe bench
+        uses: actions/download-artifact@v4
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-upstream-${{ matrix.app }}-${{ matrix.frappe }}-${{ hashFiles('**/*requirements.txt', '**/pyproject.toml', '**/setup.py', '**/setup.cfg') }}
-          restore-keys: |
-            ${{ runner.os }}-upstream-${{ matrix.app }}-${{ matrix.frappe }}-
-            ${{ runner.os }}-upstream-
-            ${{ runner.os }}-pip-
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/prepared-bench
 
-      - name: Setup Frappe
+      - name: Restore prepared Frappe bench
         run: |
+          tar -C /home/runner -xf "$RUNNER_TEMP/prepared-bench/frappe-bench.tar"
           pip install frappe-bench
-          bench init \
-            --frappe-branch "${{ matrix.frappe }}" \
-            --skip-redis-config-generation \
-            --skip-assets \
-            --python "$(which python)" \
-            ~/frappe-bench
 
       - name: Fetch application dependencies
         if: matrix.app != 'frappe'
@@ -394,17 +476,11 @@ jobs:
           else
             bench get-app --branch "${{ matrix.app_branch }}" erpnext https://github.com/frappe/erpnext.git
           fi
+          bench setup requirements --dev
 
       - name: Create PostgreSQL test site
         working-directory: /home/runner/frappe-bench
         run: |
-          bench get-app frappe_pg "$GITHUB_WORKSPACE"
-          bench setup requirements --dev
-          if [[ "${{ matrix.app }}" == "frappe" ]]; then
-            bench setup requirements --node
-            CI=Yes bench build --force --production
-          fi
-
           # Frappe's own command tests read these from common_site_config,
           # not from the arguments used to create the primary test site.
           bench set-config root_login postgres -g
@@ -479,12 +555,32 @@ jobs:
               --site test_site \
               --group "${{ matrix.test_group }}" || status=$?
 
-            # User Invitation can leave PostgreSQL's transaction aborted after
-            # an expected-error path. Run it last in remainder 2 so it is still
-            # covered without allowing that state to contaminate later modules.
+            # A few Frappe tests are state-sensitive rather than PostgreSQL-
+            # specific. Run them on a clean secondary site after the remainder,
+            # then run User Invitation last because its expected-error path can
+            # leave PostgreSQL's transaction aborted.
             if [[ "${{ matrix.test_group }}" == "remainder-2" ]]; then
+              cd ..
+              bench new-site isolated_site \
+                --db-type postgres \
+                --db-host 127.0.0.1 \
+                --db-port 5432 \
+                --db-name test_isolated \
+                --db-password test_isolated \
+                --db-root-username postgres \
+                --db-root-password root \
+                --admin-password admin
+              bench --site isolated_site execute frappe.utils.install.before_tests
+              bench --site isolated_site install-app frappe_pg
+              bench --site isolated_site set-config allow_tests 1 --parse
+              bench --site isolated_site set-config host_name "http://isolated_site:8000"
+              echo "127.0.0.1 isolated_site" | sudo tee -a /etc/hosts
+              cd sites
               ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_frappe_test_group.py" \
-                --site test_site \
+                --site isolated_site \
+                --group state-sensitive || status=$?
+              ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_frappe_test_group.py" \
+                --site isolated_site \
                 --group user-invitation || status=$?
             fi
             exit "$status"
