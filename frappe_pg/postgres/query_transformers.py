@@ -770,6 +770,68 @@ def convert_mysql_inner_join_without_condition(query):
     return pattern.sub(replace, query)
 
 
+def normalize_hrms_legacy_string_literals(query):
+    """Translate identifier-shaped string literals in two legacy HRMS raw queries.
+
+    PostgreSQL treats double quotes as identifiers. Older HRMS raw SQL uses
+    them for the ``Approved`` expense-claim status and the ``earnings`` salary
+    detail parentfield. Restrict these rewrites to their exact table/query
+    contexts rather than treating arbitrary identifier-shaped tokens as strings.
+    """
+    if re.search(
+        r'\bFROM\s+"tabExpense Claim Advance"\s+eca\s*,\s*"tabExpense Claim"\s+ec', query, re.IGNORECASE
+    ):
+        query = re.sub(
+            r'\bec\.approval_status\s*=\s*"Approved"',
+            "ec.approval_status='Approved'",
+            query,
+            flags=re.IGNORECASE,
+        )
+
+    if re.search(r'\bFROM\s+"tabSalary Slip"\s+ss\s*,\s*"tabSalary Detail"\s+sd', query, re.IGNORECASE):
+        query = re.sub(
+            r'\bsd\.parentfield\s*=\s*"earnings"',
+            "sd.parentfield='earnings'",
+            query,
+            flags=re.IGNORECASE,
+        )
+    return query
+
+
+def normalize_hrms_staffing_plan_aggregate(query):
+    """Group HRMS's legacy staffing-plan aggregate by every projected dimension."""
+    required = (
+        r'\bSELECT\s+DISTINCT\s+spd\.parent\s*,',
+        r'\bFROM\s+"tabStaffing Plan Detail"\s+spd\s*,\s*"tabStaffing Plan"\s+sp',
+        r'\bSUM\s*\(\s*spd\.vacancies\s*\)',
+        r'\bspd\.designation\b',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE | re.DOTALL) for pattern in required):
+        return query
+    if re.search(r'\bGROUP\s+BY\b', query, re.IGNORECASE):
+        return query
+    return query.rstrip() + " GROUP BY spd.parent, sp.from_date, sp.to_date, sp.name, spd.designation"
+
+
+def normalize_hrms_income_tax_salary_slip_grouping(query):
+    """Aggregate the unused Salary Slip name in HRMS's grouped exemption query."""
+    required = (
+        r'\bFROM\s+"tabSalary Slip"',
+        r'\b(?:INNER\s+)?JOIN\s+"tabSalary Detail"',
+        r'\bSUM\s*\(\s*"tabSalary Detail"\."amount"\s*\)',
+        r'\bGROUP\s+BY\s+"tabSalary Slip"\."employee"\s*,\s*"tabSalary Detail"\."salary_component"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE | re.DOTALL) for pattern in required):
+        return query
+    return re.sub(
+        r'(?P<name>"tabSalary Slip"\."name")(?P<comma>\s*,)',
+        r'MIN(\g<name>) AS "name"\g<comma>',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
 def normalize_hrms_shift_assignment_empty_end_date(query):
     """Treat HRMS Shift Assignment empty end dates as NULL on PostgreSQL.
 
@@ -981,6 +1043,9 @@ def apply_all_query_transformations(query):
     query = normalize_payment_request_single_match_grouping(query)
     query = cast_timestamp_pattern_matches(query)
     query = convert_mysql_inner_join_without_condition(query)
+    query = normalize_hrms_legacy_string_literals(query)
+    query = normalize_hrms_staffing_plan_aggregate(query)
+    query = normalize_hrms_income_tax_salary_slip_grouping(query)
     query = normalize_hrms_shift_assignment_empty_end_date(query)
     query = normalize_hrms_skill_assessment_group_order(query)
     query = normalize_erpnext_production_plan_subitems_grouping(query)
