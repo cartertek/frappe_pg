@@ -343,25 +343,40 @@ def convert_numeric_truthiness(query):
 
 
 def convert_mysql_double_quoted_literals(query):
-    """Convert unambiguous MySQL double-quoted string literals to SQL strings.
+    """Convert legacy MySQL double-quoted string literals to SQL strings.
 
-    PostgreSQL treats double quotes as identifier delimiters. Frappe field names
-    do not contain spaces, so a double-quoted token containing whitespace on the
-    right side of a predicate is unambiguously a legacy MySQL string literal in
-    the application SQL we need to support (for example ``doctype = "HR Settings"``).
+    PostgreSQL treats double quotes as identifier delimiters. Two shapes are
+    safe enough to distinguish from PostgreSQL column-to-column comparisons:
 
-    Deliberately leave identifier-shaped values such as ``"other_column"``
-    untouched because those may be real PostgreSQL identifiers.
+    * a right-hand token containing whitespace (for example ``"HR Settings"``);
+    * an identifier-shaped right-hand token when the left-hand field is an
+      unquoted legacy SQL identifier (for example ``name = "abc123"``).
+
+    Frappe/Pypika-generated PostgreSQL column comparisons quote the field on
+    both sides, so ``"paid_amount" = "return_amount"`` remains untouched.
     """
-    literal = re.compile(
+    whitespace_literal = re.compile(
         r'(?P<operator>=|<>|!=|<=|>=|<|>)' r'(?P<space>\s*)"(?P<value>[^"\r\n]*\s+[^"\r\n]*)"' r'(?!\s*\.)'
     )
+    bare_field_literal = re.compile(
+        r'(?P<field>(?<![.\w"])[A-Za-z_][A-Za-z0-9_$]*)'
+        r'(?P<before>\s*)(?P<operator>=|<>|!=|<=|>=|<|>)(?P<after>\s*)'
+        r'"(?P<value>[A-Za-z0-9_$@.:+/-]+)"(?!\s*\.)'
+    )
 
-    def replace(match):
+    def replace_whitespace(match):
         value = match.group("value").replace("'", "''")
         return f'{match.group("operator")}{match.group("space")}\'{value}\''
 
-    return literal.sub(replace, query)
+    def replace_bare_field(match):
+        value = match.group("value").replace("'", "''")
+        return (
+            f'{match.group("field")}{match.group("before")}{match.group("operator")}'
+            f'{match.group("after")}\'{value}\''
+        )
+
+    query = whitespace_literal.sub(replace_whitespace, query)
+    return bare_field_literal.sub(replace_bare_field, query)
 
 
 def convert_mysql_update_join(query):
