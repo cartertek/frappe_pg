@@ -462,6 +462,8 @@ class TestQueryTransformers(unittest.TestCase):
         self.assertNotIn("'0000-00-00'", transformed)
         self.assertIn('ORDER BY MAX("tabJournal Entry"."posting_date")', transformed)
 
+        self.assertEqual(normalize_erpnext_bank_clearance_journal_query(transformed), transformed)
+
     def test_unrelated_journal_group_query_is_unchanged(self):
         query = 'SELECT COUNT(*) FROM "tabJournal Entry" GROUP BY "company"'
         self.assertEqual(normalize_erpnext_bank_clearance_journal_query(query), query)
@@ -626,6 +628,10 @@ class TestQueryTransformers(unittest.TestCase):
         query = 'SELECT TIMESTAMP("posting_date","posting_time") "posting_datetime" FROM "tabStock Entry"'
         expected = 'SELECT ("posting_date" + "posting_time") "posting_datetime" FROM "tabStock Entry"'
         self.assertEqual(convert_mysql_timestamp_pair(query), expected)
+        self.assertEqual(
+            convert_mysql_timestamp_pair("SELECT timestamp(sle.posting_date, sle.posting_time) FROM t sle"),
+            "SELECT (sle.posting_date + sle.posting_time) FROM t sle",
+        )
         self.assertEqual(
             convert_mysql_timestamp_pair('SELECT TIMESTAMP("posting_date") FROM t'),
             'SELECT TIMESTAMP("posting_date") FROM t',
