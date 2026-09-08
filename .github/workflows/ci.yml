@@ -530,6 +530,36 @@ jobs:
           fi
           bench setup requirements --dev
 
+      - name: Backport upstream PostgreSQL test fixture fix
+        if: matrix.app != 'frappe'
+        working-directory: /home/runner/frappe-bench
+        run: |
+          # ERPNext develop commit c541bc9239 fixes a test-only warehouse-name
+          # case mismatch that MariaDB's default collation hides but PostgreSQL
+          # correctly rejects. Keep application runtime code untouched and
+          # apply the same one-line fixture correction to the tested branches.
+          python - <<'PY'
+          from pathlib import Path
+
+          candidates = [
+              Path("apps/erpnext/erpnext/tests/utils.py"),
+              Path("apps/erpnext/erpnext/manufacturing/doctype/workstation/test_records.json"),
+          ]
+          old = '"warehouse": "_Test warehouse - _TC"'
+          new = '"warehouse": "_Test Warehouse - _TC"'
+          changed = 0
+          for path in candidates:
+              if not path.exists():
+                  continue
+              source = path.read_text()
+              if old not in source:
+                  continue
+              path.write_text(source.replace(old, new, 1))
+              changed += 1
+          if changed != 1:
+              raise SystemExit(f"expected exactly one ERPNext workstation fixture correction, changed {changed}")
+          PY
+
       - name: Create PostgreSQL test site
         working-directory: /home/runner/frappe-bench
         run: |
