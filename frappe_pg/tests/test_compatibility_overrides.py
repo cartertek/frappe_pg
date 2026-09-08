@@ -387,6 +387,53 @@ class TestPostgresUniqueViolationCompatibility(unittest.TestCase):
             self.assertIs(Database.is_unique_key_violation, original)
 
 
+class TestBatchValuationLockCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import batch_valuation_lock
+
+        batch_valuation_lock._original_get_batch_stock_before_date = None
+        batch_valuation_lock._patched_get_batch_stock_before_date = None
+
+    def test_detects_postgres_safe_upstream_shape(self):
+        from frappe_pg.compat.erpnext import batch_valuation_lock
+
+        def old_method(self):
+            query = child.stock_value_difference  # noqa: F821
+            query = query.for_update().groupby(child.batch_no)  # noqa: F821
+            return child.type_of_transaction.isin(["Inward", "Outward"])  # noqa: F821
+
+        def fixed_method(self):
+            if frappe.db.db_type == "postgres":  # noqa: F821
+                child_query.select(child.name).where(conditions).for_update().run()  # noqa: F821
+            if frappe.db.db_type != "postgres":  # noqa: F821
+                return grouped.for_update()  # noqa: F821
+
+        self.assertTrue(batch_valuation_lock._legacy_shape_supported(old_method))
+        self.assertFalse(batch_valuation_lock._upstream_is_compatible(old_method))
+        self.assertTrue(batch_valuation_lock._upstream_is_compatible(fixed_method))
+
+    def test_applies_once_and_restores_original(self):
+        from frappe_pg.compat.erpnext import batch_valuation_lock
+
+        def old_method(self):
+            query = child.stock_value_difference  # noqa: F821
+            query = query.for_update().groupby(child.batch_no)  # noqa: F821
+            return child.type_of_transaction.isin(["Inward", "Outward"])  # noqa: F821
+
+        cls = types.SimpleNamespace(get_batch_stock_before_date=old_method)
+        module = types.SimpleNamespace(BatchNoValuation=cls)
+        with patch.object(batch_valuation_lock, "_load_serial_batch_bundle", return_value=module):
+            self.assertTrue(batch_valuation_lock.is_needed())
+            self.assertTrue(batch_valuation_lock.apply())
+            self.assertIs(
+                cls.get_batch_stock_before_date,
+                batch_valuation_lock._compatible_get_batch_stock_before_date,
+            )
+            self.assertFalse(batch_valuation_lock.apply())
+            self.assertTrue(batch_valuation_lock.remove())
+            self.assertIs(cls.get_batch_stock_before_date, old_method)
+
+
 class TestPaymentLedgerGroupingCompatibility(unittest.TestCase):
     def tearDown(self):
         from frappe_pg.compat.erpnext import payment_ledger_grouping

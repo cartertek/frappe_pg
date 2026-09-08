@@ -1,6 +1,6 @@
 """Registry for narrowly scoped application-level PostgreSQL compatibility overrides."""
 
-from frappe_pg.compat.erpnext import payment_ledger_grouping, trends_group_by
+from frappe_pg.compat.erpnext import batch_valuation_lock, payment_ledger_grouping, trends_group_by
 from frappe_pg.compat.frappe import (
     goal_aggregation,
     postgres_boolean_values,
@@ -21,6 +21,7 @@ _COMPATIBILITY_OVERRIDES = (
     unique_insert_transaction,
     trends_group_by,
     payment_ledger_grouping,
+    batch_valuation_lock,
 )
 
 
