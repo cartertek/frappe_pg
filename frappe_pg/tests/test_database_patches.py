@@ -17,6 +17,7 @@ from frappe_pg.postgres.query_transformers import (
     expand_mysql_having_alias,
     remove_erpnext_inventory_dimension_default_order,
     remove_index_hints,
+    remove_order_by_from_aggregate_only_query,
 )
 
 
@@ -106,6 +107,25 @@ class TestQueryTransformers(unittest.TestCase):
     def test_mysql_having_unknown_alias_is_unchanged(self):
         query = "SELECT count(*) AS total FROM tabThing HAVING other_alias > 0"
         self.assertEqual(expand_mysql_having_alias(query), query)
+
+    def test_aggregate_only_query_drops_irrelevant_default_order(self):
+        query = (
+            'SELECT MAX("uid") "uid" FROM "tabCommunication" '
+            'WHERE "email_account"=%(param1)s AND "uid">0 ORDER BY "creation" DESC'
+        )
+        expected = (
+            'SELECT MAX("uid") "uid" FROM "tabCommunication" ' 'WHERE "email_account"=%(param1)s AND "uid">0'
+        )
+        self.assertEqual(remove_order_by_from_aggregate_only_query(query), expected)
+
+    def test_grouped_or_nonaggregate_ordering_is_unchanged(self):
+        cases = [
+            'SELECT MAX("uid") FROM "tabCommunication" GROUP BY "email_account" ORDER BY "creation" DESC',
+            'SELECT "name" FROM "tabCommunication" ORDER BY "creation" DESC',
+        ]
+        for query in cases:
+            with self.subTest(query=query):
+                self.assertEqual(remove_order_by_from_aggregate_only_query(query), query)
 
     def test_erpnext_inventory_dimension_distinct_drops_only_implicit_modified_order(self):
         query = (

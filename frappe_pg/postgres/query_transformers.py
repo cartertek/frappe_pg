@@ -328,6 +328,30 @@ def expand_mysql_having_alias(query):
     return having.sub(replace, query, count=1)
 
 
+def remove_order_by_from_aggregate_only_query(query):
+    """Drop ORDER BY from a single-row aggregate query with no GROUP BY.
+
+    Frappe can carry a DocType's default ordering into Query Builder aggregate
+    requests such as ``SELECT MAX(uid) ... ORDER BY creation DESC``. PostgreSQL
+    rejects the non-aggregate ORDER BY expression, while the ordering cannot
+    affect a query that returns one aggregate row.
+    """
+    if re.search(r"\bGROUP\s+BY\b", query, re.IGNORECASE):
+        return query
+    select_match = re.search(r"\bSELECT\b(?P<select>.+?)\bFROM\b", query, re.IGNORECASE | re.DOTALL)
+    if not select_match:
+        return query
+
+    aggregate = re.compile(r"^(?:COUNT|SUM|AVG|MIN|MAX)\s*\(", re.IGNORECASE)
+    items = [item.strip() for item in split_by_comma(select_match.group("select"))]
+    if not items or any(not aggregate.match(item) for item in items):
+        return query
+
+    return re.sub(
+        r"\s+ORDER\s+BY\s+.+?(?=(?:\s+LIMIT\s+\d+)?\s*$)", "", query, flags=re.IGNORECASE | re.DOTALL
+    )
+
+
 def remove_erpnext_inventory_dimension_default_order(query):
     """Remove Frappe's implicit modified ordering from ERPNext's DISTINCT inventory-dimension query.
 
@@ -509,10 +533,11 @@ def apply_all_query_transformations(query):
     4. Convert DATE_FORMAT to TO_CHAR (simple replacement)
     5. Convert MySQL current-date arithmetic
     6. Expand simple MySQL HAVING aliases
-    7. Remove ERPNext inventory-dimension implicit ordering under DISTINCT
-    8. Convert MySQL numeric truthiness in boolean predicates
-    9. Convert unambiguous double-quoted string literals
-    10. Convert simple MySQL UPDATE ... JOIN statements
+    7. Remove irrelevant ORDER BY from aggregate-only single-row queries
+    8. Remove ERPNext inventory-dimension implicit ordering under DISTINCT
+    9. Convert MySQL numeric truthiness in boolean predicates
+    10. Convert unambiguous double-quoted string literals
+    11. Convert simple MySQL UPDATE ... JOIN statements
 
     Args:
         query: SQL query string
@@ -536,6 +561,7 @@ def apply_all_query_transformations(query):
     query = convert_date_format(query)
     query = convert_mysql_date_arithmetic(query)
     query = expand_mysql_having_alias(query)
+    query = remove_order_by_from_aggregate_only_query(query)
     query = remove_erpnext_inventory_dimension_default_order(query)
     query = convert_numeric_truthiness(query)
     query = convert_mysql_double_quoted_literals(query)
