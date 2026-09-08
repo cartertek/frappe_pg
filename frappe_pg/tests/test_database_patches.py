@@ -239,6 +239,11 @@ class TestQueryTransformers(unittest.TestCase):
         query = 'SELECT * FROM "tabExample" WHERE "name" = "other_column"'
         self.assertEqual(convert_mysql_double_quoted_literals(query), query)
 
+    def test_double_quoted_mysql_like_pattern(self):
+        query = 'select data from "__UserSettings" where data like "%%%s%%"'
+        expected = "select data from \"__UserSettings\" where data like '%%%s%%'"
+        self.assertEqual(convert_mysql_double_quoted_literals(query), expected)
+
     def test_double_quoted_mysql_string_literals_in_legacy_in_list(self):
         query = (
             'SELECT * FROM "tabSingles" WHERE field in ('
