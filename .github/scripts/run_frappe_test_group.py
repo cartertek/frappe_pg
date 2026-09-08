@@ -127,7 +127,9 @@ def patch_v15_fixture_import_test(module):
     if test_class is None:
         return
     method = test_class.test_fixtures_import
-    if getattr(method, "_frappe_pg_fixture_guard", False) or "frappe.db.commit()" in inspect.getsource(method):
+    if getattr(method, "_frappe_pg_fixture_guard", False) or "frappe.db.commit()" in inspect.getsource(
+        method
+    ):
         return
 
     def compatible_test(self):
@@ -217,6 +219,7 @@ class SelectedTestRunner(ParallelTestRunner):
             module = self.get_module(path, filename)
             skip_v15_stale_assertions(module)
             patch_v15_command_test(module)
+            patch_v15_fixture_import_test(module)
         return super().run_tests_for_file(file_info)
 
     def get_test_file_list(self):
@@ -230,7 +233,9 @@ class SelectedTestRunner(ParallelTestRunner):
             selected = [by_path[path] for path in requested if path in by_path]
             if self.group in ALTERNATIVE_PATH_GROUPS:
                 if not selected:
-                    raise RuntimeError(f"Missing expected Frappe test file alternatives: {', '.join(requested)}")
+                    raise RuntimeError(
+                        f"Missing expected Frappe test file alternatives: {', '.join(requested)}"
+                    )
             else:
                 missing = [path for path in requested if path not in by_path]
                 if missing:
