@@ -20,6 +20,8 @@ ISOLATED_GROUPS = {
     "permissions": ["tests/test_permissions.py", "tests/test_seen.py"],
     "db-query": ["tests/test_db_query.py"],
     "auth": ["tests/test_auth.py"],
+    "boot": ["tests/test_boot.py"],
+    "fixture-import": ["tests/test_fixture_import.py"],
     "email-account": ["email/doctype/email_account/test_email_account.py"],
     # Frappe moved this module between v15 and v16.
     "commands": ["tests/test_commands.py", "commands/test_commands.py"],
@@ -117,8 +119,42 @@ def patch_v15_command_test(module):
     test_class.test_backup_no_options = guarded_test
 
 
+def patch_v15_fixture_import_test(module):
+    """Backport v16's fixture-import transaction ordering to the v15 test."""
+    if module.__name__ != "frappe.tests.test_fixture_import":
+        return
+    test_class = getattr(module, "TestFixtureImport", None)
+    if test_class is None:
+        return
+    method = test_class.test_fixtures_import
+    if getattr(method, "_frappe_pg_fixture_guard", False) or "frappe.db.commit()" in inspect.getsource(method):
+        return
+
+    def compatible_test(self):
+        self.assertFalse(frappe.db.exists("DocType", "temp_doctype"))
+        self.create_new_doctype("temp_doctype")
+        frappe.db.commit()
+
+        dummy_names = ["jhon", "jane"]
+        path = self.insert_dummy_data_and_export("temp_doctype", dummy_names)
+        frappe.db.truncate("temp_doctype")
+        module.import_doc(path)
+
+        self.assertEqual(frappe.db.count("temp_doctype"), len(dummy_names))
+        data = frappe.get_all("temp_doctype", "member_name")
+        frappe.db.truncate("temp_doctype")
+        self.assertEqual(set(dummy_names), {row["member_name"] for row in data})
+
+        module.delete_doc("DocType", "temp_doctype", delete_permanently=True)
+        frappe.db.commit()
+        module.os.remove(path)
+
+    compatible_test._frappe_pg_fixture_guard = True
+    test_class.test_fixtures_import = compatible_test
+
+
 def patch_v15_doctype_delete_cache():
-    """Backport v16's DocType cache clear after deletion for v15 tests."""
+    """Backport v16's DocType cache invalidation behavior for v15 tests."""
     from frappe.model import delete_doc as delete_doc_module
 
     original = delete_doc_module.delete_doc
@@ -130,9 +166,19 @@ def patch_v15_doctype_delete_cache():
         return
 
     def delete_doc_with_cache(doctype, name, *args, **kwargs):
+        parent_doctypes = []
+        if doctype == "DocType":
+            parent_doctypes = frappe.get_all(
+                "Custom Field",
+                filters={"options": name, "fieldtype": ["in", frappe.model.table_fields]},
+                pluck="dt",
+            )
+
         result = original(doctype, name, *args, **kwargs)
         if doctype == "DocType":
             frappe.clear_cache(doctype=name)
+            for parent in parent_doctypes:
+                frappe.clear_cache(doctype=parent)
         return result
 
     delete_doc_with_cache._frappe_pg_cache_guard = True
