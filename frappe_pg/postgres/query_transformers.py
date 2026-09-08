@@ -1416,6 +1416,46 @@ def normalize_erpnext_batch_availability_grouping(query):
     return query
 
 
+def normalize_erpnext_stock_ledger_batch_grouping(query):
+    """Match ERPNext develop's grouped Stock Ledger batch query.
+
+    Older ERPNext selects item_code and Batch expiry/creation fields outside a
+    GROUP BY on batch_no + warehouse. Develop aggregates those dependent scalar
+    values with MAX so PostgreSQL accepts the query without changing grouping.
+    """
+    required = (
+        r'\bFROM\s+"tabStock Ledger Entry"',
+        r'\bJOIN\s+"tabBatch"',
+        r'SUM\s*\(\s*"tabStock Ledger Entry"\."actual_qty"\s*\)',
+        r'\bGROUP\s+BY\s+"tabStock Ledger Entry"\."batch_no"\s*,\s*' r'"tabStock Ledger Entry"\."warehouse"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+
+    query = re.sub(
+        r'(?<![A-Za-z0-9_])"tabStock Ledger Entry"\."item_code"(?=\s*(?:,|FROM\b))',
+        'MAX("tabStock Ledger Entry"."item_code") AS "item_code"',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    query = re.sub(
+        r'(?<![A-Za-z0-9_])"tabBatch"\."expiry_date"(?=\s*(?:,|FROM\b))',
+        'MAX("tabBatch"."expiry_date") AS "expiry_date"',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    for field in ("creation", "expiry_date"):
+        query = re.sub(
+            rf'(?P<prefix>\bORDER\s+BY\s+)"tabBatch"\."{field}"',
+            rf'\g<prefix>MAX("tabBatch"."{field}")',
+            query,
+            flags=re.IGNORECASE,
+        )
+    return query
+
+
 def normalize_erpnext_unreconcile_payment_grouping(query):
     """Aggregate dependent Payment Ledger fields in unreconciliation queries.
 
@@ -1640,6 +1680,7 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_landed_cost_center_aggregate(query)
     query = normalize_erpnext_budget_requested_amount(query)
     query = normalize_erpnext_batch_availability_grouping(query)
+    query = normalize_erpnext_stock_ledger_batch_grouping(query)
     query = normalize_erpnext_unreconcile_payment_grouping(query)
     query = normalize_erpnext_reserved_warehouse_distinct(query)
     query = convert_mysql_update_join(query)
