@@ -9,6 +9,7 @@ from frappe.database.utils import EmptyQueryValues
 from frappe_pg.postgres import database_patches
 from frappe_pg.postgres.query_transformers import (
     apply_all_query_transformations,
+    cast_timestamp_pattern_matches,
     convert_date_format,
     convert_if_to_case,
     convert_ifnull_to_coalesce,
@@ -23,6 +24,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_v15_bom_group_query,
     normalize_hrms_shift_assignment_empty_end_date,
     normalize_hrms_skill_assessment_group_order,
+    normalize_payment_request_single_match_grouping,
     remove_erpnext_inventory_dimension_default_order,
     remove_index_hints,
     remove_order_by_from_aggregate_only_query,
@@ -304,6 +306,29 @@ class TestQueryTransformers(unittest.TestCase):
         query = 'SELECT * FROM "tabX" WHERE "tabX"."a" AND "tabX"."b"'
         expected = 'SELECT * FROM "tabX" WHERE ("tabX"."a" <> 0) AND ("tabX"."b" <> 0)'
         self.assertEqual(convert_numeric_truthiness(query), expected)
+
+    def test_payment_request_single_match_name_is_aggregated(self):
+        query = """SELECT "sq0"."payment_request" FROM (
+            SELECT "reference_doctype","reference_name","outstanding_amount" "allocated_amount",
+            "name" "payment_request",COUNT(*) "count" FROM "tabPayment Request"
+            WHERE "docstatus"= '1'
+            GROUP BY "reference_doctype","reference_name","outstanding_amount"
+        ) "sq0" WHERE "sq0"."count"= '1'"""
+        transformed = normalize_payment_request_single_match_grouping(query)
+        self.assertIn('MIN("name") "payment_request"', transformed)
+
+    def test_other_grouped_name_projection_is_unchanged(self):
+        query = 'SELECT "name",COUNT(*) "count" FROM "tabOther" GROUP BY "status"'
+        self.assertEqual(normalize_payment_request_single_match_grouping(query), query)
+
+    def test_timestamp_like_is_cast_to_text(self):
+        query = """SELECT "name" FROM "tabLeave Ledger Entry" WHERE "creation" ILIKE '2026-04-01%'"""
+        expected = """SELECT "name" FROM "tabLeave Ledger Entry" WHERE CAST("creation" AS TEXT) ILIKE '2026-04-01%'"""
+        self.assertEqual(cast_timestamp_pattern_matches(query), expected)
+
+    def test_non_timestamp_like_is_unchanged(self):
+        query = """SELECT "name" FROM "tabUser" WHERE "name" ILIKE 'test%'"""
+        self.assertEqual(cast_timestamp_pattern_matches(query), query)
 
     def test_mysql_inner_join_without_condition_becomes_cross_join(self):
         query = """SELECT gl.party FROM "tabGL Entry" gl
