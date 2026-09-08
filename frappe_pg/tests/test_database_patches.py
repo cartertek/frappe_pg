@@ -281,6 +281,20 @@ class TestQueryTransformers(unittest.TestCase):
             with self.subTest(query=query):
                 self.assertEqual(convert_numeric_truthiness(query), query)
 
+    def test_numeric_truthiness_rewrites_qualified_legacy_field(self):
+        query = (
+            'SELECT * FROM "tabBOM Item" bom_item WHERE (item.is_stock_item = 1 OR bom_item.is_phantom_item)'
+        )
+        expected = (
+            'SELECT * FROM "tabBOM Item" bom_item WHERE '
+            '(item.is_stock_item = 1 OR (bom_item.is_phantom_item <> 0))'
+        )
+        self.assertEqual(convert_numeric_truthiness(query), expected)
+
+    def test_numeric_truthiness_leaves_qualified_comparison_unchanged(self):
+        query = 'SELECT * FROM "tabBOM Item" bom_item WHERE bom_item.is_phantom_item = 1'
+        self.assertEqual(convert_numeric_truthiness(query), query)
+
     def test_numeric_truthiness_does_not_touch_compared_identifiers(self):
         query = 'WHERE "paid_amount"="return_amount" AND "docstatus"=1'
         self.assertEqual(convert_numeric_truthiness(query), query)
