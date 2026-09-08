@@ -158,6 +158,15 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         self.assertNotIn('"end_date"=', transformed)
         self.assertIn('"end_date" IS NULL', transformed)
 
+    def test_hrms_shift_assignment_empty_end_date_parameter_becomes_null(self):
+        query = (
+            'SELECT "employee" FROM "tabShift Assignment" WHERE '
+            '("end_date">=%(date)s OR "end_date" IS NULL OR "end_date"=%(param4)s)'
+        )
+        transformed = normalize_hrms_shift_assignment_empty_end_date(query)
+        self.assertNotIn('"end_date"=%(param4)s', transformed)
+        self.assertIn('"end_date" IS NULL', transformed)
+
     def test_other_empty_string_comparison_is_unchanged(self):
         query = "SELECT \"name\" FROM \"tabOther\" WHERE \"end_date\"=''"
         self.assertEqual(normalize_hrms_shift_assignment_empty_end_date(query), query)
