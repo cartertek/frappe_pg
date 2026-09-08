@@ -316,12 +316,24 @@ def convert_mysql_double_quoted_literals(query):
     literal = re.compile(
         r'(?P<operator>=|<>|!=|<=|>=|<|>)' r'(?P<space>\s*)"(?P<value>[^"\r\n]*\s+[^"\r\n]*)"' r'(?!\s*\.)'
     )
+    in_list = re.compile(
+        r'(?P<field>(?<![.\w"])[A-Za-z_][A-Za-z0-9_$]*)' r'(?P<space>\s+IN\s*\()(?P<values>[^()]*)\)',
+        re.IGNORECASE,
+    )
 
     def replace(match):
         value = match.group("value").replace("'", "''")
         return f'{match.group("operator")}{match.group("space")}\'{value}\''
 
-    return literal.sub(replace, query)
+    def replace_in_list(match):
+        parts = [part.strip() for part in match.group("values").split(",")]
+        if not parts or any(not re.fullmatch(r'"[^"\r\n]*"', part) for part in parts):
+            return match.group(0)
+        values = ", ".join("'" + part[1:-1].replace("'", "''") + "'" for part in parts)
+        return f'{match.group("field")}{match.group("space")}{values})'
+
+    query = literal.sub(replace, query)
+    return in_list.sub(replace_in_list, query)
 
 
 def convert_mysql_update_join(query):
