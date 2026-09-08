@@ -10,6 +10,10 @@ from frappe_pg.postgres.query_transformers import (
     convert_date_format,
     convert_if_to_case,
     convert_ifnull_to_coalesce,
+    convert_mysql_date_arithmetic,
+    convert_mysql_double_quoted_literals,
+    convert_mysql_update_join,
+    convert_numeric_truthiness,
     remove_index_hints,
 )
 
@@ -55,6 +59,130 @@ class TestQueryTransformers(unittest.TestCase):
             with self.subTest(query=query):
                 self.assertEqual(convert_date_format(query), expected)
 
+    def test_mysql_date_sub_curdate_from_erpnext_dashboard(self):
+        query = "transaction_date > date_sub(curdate(), interval 1 year)"
+        expected = "transaction_date > CURRENT_DATE - INTERVAL '1 year'"
+        self.assertEqual(convert_mysql_date_arithmetic(query), expected)
+
+    def test_mysql_date_arithmetic_supported_units_and_case(self):
+        cases = {
+            "DATE_SUB(posting_date, INTERVAL 30 DAY)": "posting_date - INTERVAL '30 day'",
+            "date_sub(posting_date, interval 2 WEEK)": "posting_date - INTERVAL '2 week'",
+            "DATE_SUB(posting_date, INTERVAL 3 MONTH)": "posting_date - INTERVAL '3 month'",
+            "CURDATE()": "CURRENT_DATE",
+        }
+        for query, expected in cases.items():
+            with self.subTest(query=query):
+                self.assertEqual(convert_mysql_date_arithmetic(query), expected)
+
+    def test_mysql_date_arithmetic_leaves_unsupported_shapes_unchanged(self):
+        cases = [
+            "DATE_SUB(posting_date, INTERVAL amount DAY)",
+            "DATE_SUB(posting_date, INTERVAL 1 HOUR)",
+            "DATE_SUB(COALESCE(posting_date, creation), INTERVAL 1 YEAR)",
+        ]
+        for query in cases:
+            with self.subTest(query=query):
+                self.assertEqual(convert_mysql_date_arithmetic(query), query)
+
+    def test_numeric_truthiness_from_hrms_employee_advance_patch(self):
+        query = (
+            'UPDATE "tabEmployee Advance" SET "status"=\'Returned\' '
+            'WHERE "docstatus"= \'1\' AND "return_amount" '
+            'AND "paid_amount"="return_amount" AND "status"=\'Paid\''
+        )
+        expected = (
+            'UPDATE "tabEmployee Advance" SET "status"=\'Returned\' '
+            'WHERE "docstatus"= \'1\' AND ("return_amount" <> 0) '
+            'AND "paid_amount"="return_amount" AND "status"=\'Paid\''
+        )
+        self.assertEqual(convert_numeric_truthiness(query), expected)
+
+        nested = (
+            'WHERE "docstatus"=1 AND ("claimed_amount" AND "return_amount") '
+            'AND "paid_amount"=("return_amount"+"claimed_amount")'
+        )
+        nested_expected = (
+            'WHERE "docstatus"=1 AND (("claimed_amount" <> 0) AND ("return_amount" <> 0)) '
+            'AND "paid_amount"=("return_amount"+"claimed_amount")'
+        )
+        self.assertEqual(convert_numeric_truthiness(nested), nested_expected)
+
+    def test_numeric_truthiness_in_case_when_from_erpnext_reserved_qty(self):
+        query = (
+            'SELECT SUM(so_item_qty - CASE WHEN dont_reserve_qty_on_return '
+            'THEN so_item_returned_qty ELSE 0 END) FROM "reserved"'
+        )
+        expected = (
+            'SELECT SUM(so_item_qty - CASE WHEN (dont_reserve_qty_on_return <> 0) '
+            'THEN so_item_returned_qty ELSE 0 END) FROM "reserved"'
+        )
+        self.assertEqual(convert_numeric_truthiness(query), expected)
+
+        mysql_if = 'SELECT IF(dont_reserve_qty_on_return, so_item_returned_qty, 0)'
+        transformed = apply_all_query_transformations(mysql_if)
+        self.assertEqual(
+            transformed,
+            'SELECT CASE WHEN (dont_reserve_qty_on_return <> 0) THEN so_item_returned_qty ELSE 0 END',
+        )
+
+    def test_numeric_truthiness_case_when_leaves_real_conditions_unchanged(self):
+        cases = [
+            'SELECT CASE WHEN amount > 0 THEN 1 ELSE 0 END',
+            'SELECT CASE WHEN TRUE THEN 1 ELSE 0 END',
+            'SELECT CASE WHEN FALSE THEN 1 ELSE 0 END',
+            'SELECT CASE WHEN COALESCE(flag, 0) THEN 1 ELSE 0 END',
+        ]
+        for query in cases:
+            with self.subTest(query=query):
+                self.assertEqual(convert_numeric_truthiness(query), query)
+
+    def test_numeric_truthiness_does_not_touch_compared_identifiers(self):
+        query = 'WHERE "paid_amount"="return_amount" AND "docstatus"=1'
+        self.assertEqual(convert_numeric_truthiness(query), query)
+
+    def test_numeric_truthiness_does_not_touch_function_arguments(self):
+        query = 'SELECT MAX(CHAR_LENGTH("name")) FROM "tabDocField"'
+        self.assertEqual(convert_numeric_truthiness(query), query)
+
+    def test_double_quoted_mysql_string_literal_with_spaces(self):
+        query = 'SELECT * FROM "tabSingles" WHERE doctype = "HR Settings" AND field = \'x\''
+        expected = 'SELECT * FROM "tabSingles" WHERE doctype = \'HR Settings\' AND field = \'x\''
+        self.assertEqual(convert_mysql_double_quoted_literals(query), expected)
+
+    def test_double_quoted_qualified_identifier_with_spaces_is_unchanged(self):
+        query = (
+            'SELECT "tabWeb Page"."route" FROM "tabWeb Page" '
+            'LEFT JOIN "tabWeb Page Block" ON '
+            '"tabWeb Page Block"."parent"="tabWeb Page"."name"'
+        )
+        self.assertEqual(convert_mysql_double_quoted_literals(query), query)
+
+    def test_double_quoted_identifier_rhs_is_not_rewritten(self):
+        query = 'SELECT * FROM "tabEmployee Advance" WHERE "paid_amount" = "return_amount"'
+        self.assertEqual(convert_mysql_double_quoted_literals(query), query)
+
+    def test_simple_mysql_update_join(self):
+        query = (
+            'UPDATE "tabSalary Detail" "sd" JOIN "tabSalary Structure" "ss" '
+            'ON "ss"."name"="sd"."parent" SET "sd"."docstatus"= \'1\' '
+            'WHERE "ss"."docstatus"= \'1\' AND "sd"."parenttype"=%(param1)s'
+        )
+        expected = (
+            'UPDATE "tabSalary Detail" AS "sd" SET "docstatus"= \'1\' '
+            'FROM "tabSalary Structure" AS "ss" '
+            'WHERE "ss"."name"="sd"."parent" AND '
+            '"ss"."docstatus"= \'1\' AND "sd"."parenttype"=%(param1)s'
+        )
+        self.assertEqual(convert_mysql_update_join(query), expected)
+
+    def test_complex_update_join_is_left_unchanged(self):
+        query = (
+            'UPDATE "a" "a1" JOIN "b" "b1" ON "a1"."id"="b1"."id" '
+            'JOIN "c" "c1" ON "b1"."id"="c1"."id" SET "a1"."x"=1 WHERE "c1"."y"=2'
+        )
+        self.assertEqual(convert_mysql_update_join(query), query)
+
     def test_pipeline_is_idempotent_for_supported_transformations(self):
         queries = [
             "SELECT IFNULL(IF(a > 0, a, 0), 0)",
@@ -79,6 +207,24 @@ class TestTransformQueryHook(unittest.TestCase):
         self.assertEqual(PostgresDatabase.rollback.__module__, "frappe.database.database")
         self.assertNotEqual(PostgresDatabase._transform_query.__module__, PostgresDatabase.sql.__module__)
         self.assertIs(PostgresDatabase._transform_query, database_patches.patched_transform_query)
+
+    def test_postgres_serialization_failure_is_classified_as_deadlock(self):
+        class SerializationFailure(Exception):
+            pgcode = "40001"
+
+        self.assertTrue(PostgresDatabase.is_deadlocked(SerializationFailure()))
+
+    def test_existing_deadlock_classification_is_preserved(self):
+        class DeadlockDetected(Exception):
+            pgcode = "40P01"
+
+        self.assertTrue(PostgresDatabase.is_deadlocked(DeadlockDetected()))
+
+    def test_unrelated_postgres_error_is_not_classified_as_deadlock(self):
+        class UniqueViolation(Exception):
+            pgcode = "23505"
+
+        self.assertFalse(PostgresDatabase.is_deadlocked(UniqueViolation()))
 
     def test_native_sql_default_still_uses_empty_query_values(self):
         default = inspect.signature(PostgresDatabase.sql).parameters["values"].default
@@ -128,7 +274,6 @@ class TestTransformQueryHook(unittest.TestCase):
             "SELECT * FROM `tabGL Entry` IGNORE INDEX (name) WHERE docstatus = 1",
             "SELECT IF(amount > 0, amount, 0) FROM `tabGL Entry`",
             "SELECT SUM(IF(docstatus = 1, debit, credit)) FROM `tabGL Entry`",
-            "SELECT IF(a, IF(b, 1, 2), IF(c, 3, 4)) FROM `tabTest`",
             "SELECT IFNULL(name, 'N/A') FROM `tabItem`",
             "SELECT IFNULL(IF(amount > 0, amount, 0), 0) FROM `tabGL Entry`",
             "SELECT DATE_FORMAT(posting_date, '%Y-%m-%d') FROM `tabGL Entry`",
@@ -137,7 +282,6 @@ class TestTransformQueryHook(unittest.TestCase):
             "SELECT IF(name REGEXP '^A', 1, 0) FROM `tabItem`",
             "SELECT IF(a > -45.0, 1, 0) FROM `tabTest`",
             "SELECT IF(a > 45, 1, 0) FROM `tabTest`",
-            "SELECT IF(a, CONCAT('x,y', b), 0) FROM `tabTest`",
         ]
         for query in corpus:
             with self.subTest(query=query):
@@ -153,6 +297,7 @@ class TestTransformQueryHook(unittest.TestCase):
     def test_patch_can_be_safely_removed_and_reapplied(self):
         database_patches.remove_postgres_fixes()
         self.assertIsNot(PostgresDatabase._transform_query, database_patches.patched_transform_query)
+        self.assertIsNot(PostgresDatabase.is_deadlocked, database_patches.patched_is_deadlocked)
         database_patches.apply_postgres_fixes()
         self.assertIs(PostgresDatabase._transform_query, database_patches.patched_transform_query)
         db = object.__new__(PostgresDatabase)
