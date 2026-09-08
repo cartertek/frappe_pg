@@ -35,6 +35,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_negative_invoice_voucher_literal,
     normalize_erpnext_production_plan_subitems_grouping,
     normalize_erpnext_repost_item_grouping,
+    normalize_erpnext_reserved_warehouse_distinct,
     normalize_erpnext_stock_voucher_group_order,
     normalize_erpnext_unreconcile_payment_grouping,
     normalize_erpnext_v15_bom_group_query,
@@ -737,6 +738,18 @@ class TestQueryTransformers(unittest.TestCase):
         ):
             self.assertIn(f'MAX("tabPayment Ledger Entry"."{field}")', transformed)
         self.assertIn('"tabPayment Ledger Entry"."against_voucher_no" "reference_name"', transformed)
+
+    def test_reserved_warehouse_distinct_uses_grouped_earliest_creation(self):
+        query = (
+            'SELECT DISTINCT "tabStock Reservation Entry"."warehouse" '
+            'FROM "tabStock Reservation Entry" '
+            'WHERE "tabStock Reservation Entry"."docstatus"=1 '
+            'ORDER BY "tabStock Reservation Entry"."creation"'
+        )
+        transformed = normalize_erpnext_reserved_warehouse_distinct(query)
+        self.assertNotIn('SELECT DISTINCT', transformed)
+        self.assertIn('GROUP BY "tabStock Reservation Entry"."warehouse"', transformed)
+        self.assertIn('ORDER BY MIN("tabStock Reservation Entry"."creation")', transformed)
 
     def test_simple_mysql_update_join(self):
         query = (
