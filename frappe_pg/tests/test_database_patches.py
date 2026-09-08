@@ -241,13 +241,25 @@ class TestQueryTransformers(unittest.TestCase):
         transformed = normalize_erpnext_bom_items_grouping(query)
         self.assertIn(
             "GROUP BY bom_item.item_code, item.stock_uom, bom_item.operation, "
-            "bom_item.operation_row_id, bom_item.bom_no, bom_item.is_phantom_item",
+            "bom_item.bom_no, bom_item.is_phantom_item",
             transformed,
         )
         self.assertIn("MAX(item.item_name) AS item_name", transformed)
         self.assertIn("MAX(bom_item.description) AS description", transformed)
         self.assertIn("MAX(bom_item.rate)", transformed)
         self.assertIn("ORDER BY MIN(bom_item.idx)", transformed)
+
+    def test_erpnext_v15_bom_does_not_invent_operation_grouping(self):
+        query = """SELECT bom_item.item_code, bom_item.operation, item.stock_uom,
+            SUM(bom_item.stock_qty/COALESCE(bom.quantity, 1)) AS qty
+            FROM "tabBOM Item" bom_item
+            JOIN "tabBOM" bom ON bom_item.parent = bom.name
+            JOIN "tabItem" item ON item.name = bom_item.item_code
+            GROUP BY item_code, stock_uom ORDER BY idx"""
+        transformed = normalize_erpnext_bom_items_grouping(query)
+        self.assertIn("MAX(bom_item.operation) AS operation", transformed)
+        self.assertIn("GROUP BY bom_item.item_code, item.stock_uom", transformed)
+        self.assertNotIn("item.stock_uom, bom_item.operation", transformed)
 
     def test_erpnext_scrap_bom_grouping_qualifies_item_code(self):
         query = """SELECT bom_item.item_code, item.item_name,
