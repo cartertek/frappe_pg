@@ -163,26 +163,16 @@ def apply_postgres_fixes():
     _original_is_deadlocked = PostgresDatabase.is_deadlocked
     _original_schema_alter = PostgresSchema.alter
     _original_db_insert = BaseDocument.db_insert
-    # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-    PostgresDatabase._transform_query = (
-        patched_transform_query  # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-    )
-    # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-    PostgresDatabase._transform_result = (
-        patched_transform_result  # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-    )
-    # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-    PostgresDatabase.is_deadlocked = staticmethod(
-        patched_is_deadlocked
-    )  # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-    # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-    PostgresSchema.alter = (
-        patched_schema_alter  # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-    )
-    # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-    BaseDocument.db_insert = (
-        patched_db_insert  # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-    )
+    # nosemgrep
+    PostgresDatabase._transform_query = patched_transform_query  # nosemgrep
+    # nosemgrep
+    PostgresDatabase._transform_result = patched_transform_result  # nosemgrep
+    # nosemgrep
+    PostgresDatabase.is_deadlocked = staticmethod(patched_is_deadlocked)  # nosemgrep
+    # nosemgrep
+    PostgresSchema.alter = patched_schema_alter  # nosemgrep
+    # nosemgrep
+    BaseDocument.db_insert = patched_db_insert  # nosemgrep
     _patches_applied = True
 
 
@@ -194,26 +184,20 @@ def remove_postgres_fixes():
         return
 
     if PostgresDatabase._transform_query == patched_transform_query:
-        # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-        PostgresDatabase._transform_query = _original_transform_query  # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
+        # nosemgrep
+        PostgresDatabase._transform_query = _original_transform_query  # nosemgrep
     if PostgresDatabase._transform_result == patched_transform_result:
-        # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-        PostgresDatabase._transform_result = _original_transform_result  # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
+        # nosemgrep
+        PostgresDatabase._transform_result = _original_transform_result  # nosemgrep
     if PostgresDatabase.is_deadlocked == patched_is_deadlocked:
-        # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-        PostgresDatabase.is_deadlocked = staticmethod(
-            _original_is_deadlocked
-        )  # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
+        # nosemgrep
+        PostgresDatabase.is_deadlocked = staticmethod(_original_is_deadlocked)  # nosemgrep
     if PostgresSchema.alter == patched_schema_alter:
-        # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-        PostgresSchema.alter = (
-            _original_schema_alter  # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-        )
+        # nosemgrep
+        PostgresSchema.alter = _original_schema_alter  # nosemgrep
     if BaseDocument.db_insert == patched_db_insert:
-        # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-        BaseDocument.db_insert = (
-            _original_db_insert  # nosemgrep: frappe-semgrep-rules.rules.frappe-monkey-patching-not-allowed
-        )
+        # nosemgrep
+        BaseDocument.db_insert = _original_db_insert  # nosemgrep
 
     _patches_applied = False
 
