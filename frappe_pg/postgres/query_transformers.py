@@ -557,8 +557,9 @@ def convert_numeric_truthiness(query):
     an actual boolean expression. Frappe Query Builder can emit this shape when
     an application combines a numeric field directly with ``&``/``|``.
 
-    This transformer intentionally handles only a bare quoted identifier used as
-    a boolean predicate operand, plus a simple quoted or unquoted identifier used
+    This transformer intentionally handles only a bare quoted identifier or a
+    qualified legacy alias/field used as a boolean predicate operand, plus a
+    simple quoted or unquoted identifier used
     directly between ``CASE WHEN`` and ``THEN``. It does not attempt to infer the
     type of arbitrary SQL expressions.
     """
@@ -568,9 +569,10 @@ def convert_numeric_truthiness(query):
         rf'(?=(?P<trailing>\s*)\bTHEN\b)',
         re.IGNORECASE,
     )
+    bare_qualified_identifier = r"[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*"
     operand = re.compile(
         rf'(?P<prefix>\bWHERE\b|\bHAVING\b|\bON\b|\bAND\b|\bOR\b|\()'
-        rf'(?P<space>\s*)(?P<identifier>{_QUOTED_IDENTIFIER})'
+        rf'(?P<space>\s*)(?P<identifier>{_QUOTED_IDENTIFIER}|{bare_qualified_identifier})'
         rf'(?=(?P<trailing>\s*)(?P<suffix>\bAND\b|\bOR\b|\)|$))',
         re.IGNORECASE,
     )
