@@ -599,9 +599,15 @@ def normalize_erpnext_bom_items_grouping(query):
     # the legacy query actually selects them.
     group_keys = ["bom_item.item_code", "item.stock_uom"]
     normalized_select = " ".join(selected_items).lower()
-    for field in ("operation", "operation_row_id", "secondary_item_type"):
-        if re.search(rf"\bbom_item\.{field}\b", normalized_select):
-            group_keys.append(f"bom_item.{field}")
+    original_group = re.search(
+        r"\bGROUP\s+BY\s+item_code\s*,\s*stock_uom(?P<extra>(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)?)",
+        query,
+        re.IGNORECASE,
+    )
+    if original_group and original_group.group("extra"):
+        extra = original_group.group("extra").lstrip(" ,").strip().lower()
+        if extra in {"operation", "operation_row_id", "secondary_item_type"}:
+            group_keys.append(f"bom_item.{extra}")
     has_phantom = re.search(r"\bbom_item\.is_phantom_item\b", normalized_select)
     has_bom_no = re.search(r"\bbom_item\.bom_no\b", normalized_select)
     if has_phantom and has_bom_no:
