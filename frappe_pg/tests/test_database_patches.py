@@ -89,6 +89,24 @@ class TestQueryTransformers(unittest.TestCase):
         query = 'SELECT MAX(CHAR_LENGTH("name")) FROM "tabDocField"'
         self.assertEqual(convert_numeric_truthiness(query), query)
 
+    def test_numeric_truthiness_does_not_rewrite_between_upper_bound(self):
+        query = (
+            'SELECT * FROM "tabLeave Ledger Entry" WHERE '
+            '"tabLeave Ledger Entry"."to_date" BETWEEN "tabLeave Allocation"."from_date" '
+            'AND "tabLeave Allocation"."to_date" OR "tabLeave Ledger Entry"."is_lwp"'
+        )
+        expected = (
+            'SELECT * FROM "tabLeave Ledger Entry" WHERE '
+            '"tabLeave Ledger Entry"."to_date" BETWEEN "tabLeave Allocation"."from_date" '
+            'AND "tabLeave Allocation"."to_date" OR ("tabLeave Ledger Entry"."is_lwp" <> 0)'
+        )
+        self.assertEqual(convert_numeric_truthiness(query), expected)
+
+    def test_numeric_truthiness_still_rewrites_boolean_and(self):
+        query = 'SELECT * FROM "tabX" WHERE "tabX"."a" AND "tabX"."b"'
+        expected = 'SELECT * FROM "tabX" WHERE ("tabX"."a" <> 0) AND ("tabX"."b" <> 0)'
+        self.assertEqual(convert_numeric_truthiness(query), expected)
+
     def test_double_quoted_mysql_string_literal_with_spaces(self):
         query = 'SELECT * FROM "tabSingles" WHERE doctype = "HR Settings" AND field = \'x\''
         expected = 'SELECT * FROM "tabSingles" WHERE doctype = \'HR Settings\' AND field = \'x\''
