@@ -375,7 +375,7 @@ def remove_erpnext_inventory_dimension_default_order(query):
     projection. Restrict this rewrite to that exact ERPNext query shape so no
     intentional ordering is discarded elsewhere.
     """
-    if not re.search(r'\bFROM\s+"tabInventory Dimension"\b', query, re.IGNORECASE):
+    if not re.search(r'\bFROM\s+"tabInventory Dimension"', query, re.IGNORECASE):
         return query
     if not re.search(r'\bSELECT\s+DISTINCT\b', query, re.IGNORECASE):
         return query
