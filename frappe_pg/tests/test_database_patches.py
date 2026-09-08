@@ -13,6 +13,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_date_arithmetic,
     convert_mysql_double_quoted_literals,
     convert_mysql_update_join,
+    convert_mysql_zero_date_sentinel,
     convert_numeric_truthiness,
     expand_mysql_having_alias,
     remove_erpnext_inventory_dimension_default_order,
@@ -61,6 +62,21 @@ class TestQueryTransformers(unittest.TestCase):
         for query, expected in cases.items():
             with self.subTest(query=query):
                 self.assertEqual(convert_date_format(query), expected)
+
+    def test_mysql_zero_date_sentinel_in_date_shaped_coalesce(self):
+        query = (
+            "where coalesce(date, '2199-12-31 00:00:00') >= '0' "
+            "and coalesce(start_date, '2199-12-31') >= '0.0'"
+        )
+        expected = (
+            "where coalesce(date, '2199-12-31 00:00:00') >= '0001-01-01 00:00:00' "
+            "and coalesce(start_date, '2199-12-31') >= '0001-01-01 00:00:00'"
+        )
+        self.assertEqual(convert_mysql_zero_date_sentinel(query), expected)
+
+    def test_zero_numeric_comparison_is_not_rewritten_as_date(self):
+        query = "WHERE COALESCE(amount, 0) >= '0'"
+        self.assertEqual(convert_mysql_zero_date_sentinel(query), query)
 
     def test_mysql_date_sub_curdate_from_erpnext_dashboard(self):
         query = "transaction_date > date_sub(curdate(), interval 1 year)"
@@ -293,6 +309,24 @@ class TestTransformQueryHook(unittest.TestCase):
         self.assertEqual(PostgresDatabase.rollback.__module__, "frappe.database.database")
         self.assertNotEqual(PostgresDatabase._transform_query.__module__, PostgresDatabase.sql.__module__)
         self.assertIs(PostgresDatabase._transform_query, database_patches.patched_transform_query)
+
+    def test_zero_timestamp_pagination_param_is_normalized(self):
+        values = {"param1": "0", "param2": "keep"}
+        query = 'SELECT * FROM "tabNote" WHERE "creation">%(param1)s AND "name">%(param2)s'
+        normalized = database_patches._normalize_zero_timestamp_params(query, values)
+        self.assertEqual(normalized["param1"], "0001-01-01 00:00:00")
+        self.assertEqual(normalized["param2"], "keep")
+        self.assertIsNot(normalized, values)
+
+    def test_zero_non_timestamp_param_is_unchanged(self):
+        values = {"param1": "0"}
+        query = 'SELECT * FROM "tabNote" WHERE "idx">%(param1)s'
+        self.assertIs(database_patches._normalize_zero_timestamp_params(query, values), values)
+
+    def test_zero_timestamp_equality_param_is_unchanged(self):
+        values = {"param1": "0"}
+        query = 'SELECT * FROM "tabNote" WHERE "creation"=%(param1)s'
+        self.assertIs(database_patches._normalize_zero_timestamp_params(query, values), values)
 
     def test_postgres_json_results_are_serialized_like_mariadb(self):
         class Column:
