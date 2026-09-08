@@ -661,6 +661,50 @@ def convert_mysql_double_quoted_literals(query):
     return in_list.sub(replace_in_list, query)
 
 
+def normalize_payment_request_single_match_grouping(query):
+    """Aggregate Payment Request name in ERPNext's single-match grouping query.
+
+    ERPNext groups Payment Requests by reference tuple, selects ``name`` and
+    ``COUNT(*)``, then keeps only groups whose count is one. MariaDB permits the
+    non-grouped ``name`` projection; PostgreSQL does not. ``MIN(name)`` is
+    equivalent for the only rows that survive the outer ``count = 1`` filter.
+    """
+    required = (
+        r'\bFROM\s+"tabPayment Request"\b',
+        r'COUNT\s*\(\s*\*\s*\)\s+(?:AS\s+)?"count"',
+        r'GROUP\s+BY\s+"reference_doctype"\s*,\s*"reference_name"\s*,\s*"outstanding_amount"',
+        r'WHERE\s+"sq0"\."count"\s*=\s*[\'"]?1[\'"]?',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE | re.DOTALL) for pattern in required):
+        return query
+
+    name_projection = re.compile(
+        r'(?P<name>(?:"tabPayment Request"\.)?"name")\s+(?:AS\s+)?"payment_request"',
+        re.IGNORECASE,
+    )
+    return name_projection.sub(r'MIN(\g<name>) "payment_request"', query, count=1)
+
+
+def cast_timestamp_pattern_matches(query):
+    """Cast Frappe timestamp fields to text for MySQL-style LIKE matching.
+
+    MySQL permits LIKE against datetime values via implicit string coercion.
+    PostgreSQL requires an explicit cast. Frappe's standard ``creation`` and
+    ``modified`` fields are timestamps, so those two fields are safe to identify
+    without application metadata.
+    """
+    pattern = re.compile(
+        r'(?<![A-Za-z0-9_])(?P<field>(?:"[^"]+"\.)?"(?:creation|modified)")'
+        r'(?P<space>\s+)(?P<op>I?LIKE)(?P<after>\s+)',
+        re.IGNORECASE,
+    )
+
+    def replace(match):
+        return f'CAST({match.group("field")} AS TEXT){match.group("space")}{match.group("op")}{match.group("after")}'
+
+    return pattern.sub(replace, query)
+
+
 def convert_mysql_inner_join_without_condition(query):
     """Translate MySQL INNER JOIN-without-condition into PostgreSQL CROSS JOIN.
 
@@ -765,6 +809,8 @@ def apply_all_query_transformations(query):
     query = remove_erpnext_inventory_dimension_default_order(query)
     query = convert_numeric_truthiness(query)
     query = convert_mysql_double_quoted_literals(query)
+    query = normalize_payment_request_single_match_grouping(query)
+    query = cast_timestamp_pattern_matches(query)
     query = convert_mysql_inner_join_without_condition(query)
     query = convert_mysql_update_join(query)
 
