@@ -938,6 +938,95 @@ def normalize_erpnext_production_plan_subitems_grouping(query):
     )
 
 
+def normalize_erpnext_bank_clearance_journal_query(query):
+    """Match ERPNext develop's PostgreSQL-safe Journal Entry bank-clearance query.
+
+    ERPNext v15/v16 groups Journal Entry rows by account/name while selecting
+    several functionally dependent columns, and also compares a Date field with
+    MySQL's ``0000-00-00`` sentinel. Develop aggregates those dependent values
+    with MAX and treats the zero date as NULL on PostgreSQL.
+    """
+    required = (
+        r'\bFROM\s+"tabJournal Entry Account"',
+        r'\bJOIN\s+"tabJournal Entry"',
+        r'\bGROUP\s+BY\s+"tabJournal Entry Account"\."account"\s*,\s*"tabJournal Entry"\."name"',
+        r'SUM\s*\(\s*"tabJournal Entry Account"\."debit_in_account_currency"\s*\)',
+        r'SUM\s*\(\s*"tabJournal Entry Account"\."credit_in_account_currency"\s*\)',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+
+    fields = (
+        ("tabJournal Entry", "cheque_no"),
+        ("tabJournal Entry", "cheque_date"),
+        ("tabJournal Entry", "posting_date"),
+        ("tabJournal Entry Account", "against_account"),
+        ("tabJournal Entry", "clearance_date"),
+        ("tabJournal Entry Account", "account_currency"),
+    )
+    for table, field in fields:
+        pattern = re.compile(
+            rf'(?<![A-Za-z0-9_])(?P<expr>"{re.escape(table)}"\."{re.escape(field)}")'
+            rf'(?P<alias>\s+(?:AS\s+)?"[A-Za-z_][A-Za-z0-9_]*")?',
+            re.IGNORECASE,
+        )
+
+        def replace(match):
+            # Do not wrap occurrences already used inside an aggregate or predicate.
+            prefix = query[max(0, match.start() - 8) : match.start()].upper()
+            if re.search(r'(?:MAX|MIN|SUM|AVG|COUNT)\s*\($', prefix):
+                return match.group(0)
+            return f'MAX({match.group("expr")}){match.group("alias") or ""}'
+
+        # Only transform the SELECT-list occurrence before the top-level FROM.
+        select_match = re.search(r'\bSELECT\b(?P<select>.+?)\bFROM\b', query, re.IGNORECASE | re.DOTALL)
+        if not select_match:
+            return query
+        select_text = select_match.group("select")
+        transformed = pattern.sub(replace, select_text, count=1)
+        query = query[: select_match.start("select")] + transformed + query[select_match.end("select") :]
+
+    query = re.sub(
+        r'(?P<field>"tabJournal Entry"\."clearance_date")\s*=\s*\'0000-00-00\'',
+        r'\g<field> IS NULL',
+        query,
+        flags=re.IGNORECASE,
+    )
+    query = re.sub(
+        r'\bORDER\s+BY\s+(?P<field>"tabJournal Entry"\."posting_date")',
+        lambda match: f'ORDER BY MAX({match.group("field")})',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    return query
+
+
+def convert_erpnext_customer_suffix_unsigned(query):
+    """Translate ERPNext's legacy Customer-name numeric suffix expression.
+
+    v15 uses ``CAST(SUBSTRING_INDEX(name, ' ', -1) AS UNSIGNED)``. PostgreSQL
+    has neither SUBSTRING_INDEX nor UNSIGNED. Mirror ERPNext develop: select the
+    last whitespace-delimited token, keep its leading digits, NULL out an empty
+    result, then cast to INTEGER. Restrict this to the Customer naming query.
+    """
+    if not re.search(r'\bFROM\s+"?tabCustomer"?\b', query, re.IGNORECASE):
+        return query
+    pattern = re.compile(
+        r"CAST\s*\(\s*SUBSTRING_INDEX\s*\(\s*(?P<name>\"?name\"?)\s*,\s*' '\s*,\s*-1\s*\)\s+AS\s+UNSIGNED\s*\)",
+        re.IGNORECASE,
+    )
+
+    def replace(match):
+        name = match.group("name")
+        return (
+            "CAST(NULLIF(regexp_replace(regexp_replace("
+            f"{name}, '^.*\\s', ''), '^(\\d*).*$', '\\1'), '') AS INTEGER)"
+        )
+
+    return pattern.sub(replace, query)
+
+
 def normalize_erpnext_advance_payment_currency_aggregate(query):
     """Aggregate Advance Payment Ledger currency with the summed advance amount.
 
@@ -1123,6 +1212,8 @@ def apply_all_query_transformations(query):
     query = normalize_hrms_shift_assignment_empty_end_date(query)
     query = normalize_hrms_skill_assessment_group_order(query)
     query = normalize_erpnext_production_plan_subitems_grouping(query)
+    query = normalize_erpnext_bank_clearance_journal_query(query)
+    query = convert_erpnext_customer_suffix_unsigned(query)
     query = normalize_erpnext_advance_payment_currency_aggregate(query)
     query = normalize_erpnext_stock_voucher_group_order(query)
     query = normalize_erpnext_landed_cost_center_aggregate(query)
