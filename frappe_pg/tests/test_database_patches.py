@@ -13,8 +13,11 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_double_quoted_literals,
     convert_mysql_update_join,
     convert_numeric_truthiness,
+    normalize_hrms_income_tax_salary_slip_grouping,
+    normalize_hrms_legacy_string_literals,
     normalize_hrms_shift_assignment_empty_end_date,
     normalize_hrms_skill_assessment_group_order,
+    normalize_hrms_staffing_plan_aggregate,
     remove_index_hints,
 )
 
@@ -108,6 +111,38 @@ class TestQueryTransformers(unittest.TestCase):
         query = 'SELECT * FROM "tabX" WHERE "tabX"."a" AND "tabX"."b"'
         expected = 'SELECT * FROM "tabX" WHERE ("tabX"."a" <> 0) AND ("tabX"."b" <> 0)'
         self.assertEqual(convert_numeric_truthiness(query), expected)
+
+    def test_hrms_employee_advance_approved_literal_is_quoted_for_postgres(self):
+        query = """SELECT sum(ifnull(allocated_amount, 0))
+FROM "tabExpense Claim Advance" eca, "tabExpense Claim" ec
+WHERE eca.employee_advance=%s AND ec.approval_status="Approved" AND ec.name=eca.parent"""
+        transformed = normalize_hrms_legacy_string_literals(query)
+        self.assertIn("ec.approval_status='Approved'", transformed)
+
+    def test_hrms_salary_detail_earnings_literal_is_quoted_for_postgres(self):
+        query = """select sum(sd.amount) from "tabSalary Slip" ss, "tabSalary Detail" sd
+where ss.name=sd.parent and sd.parentfield = "earnings"""
+        transformed = normalize_hrms_legacy_string_literals(query)
+        self.assertIn("sd.parentfield='earnings'", transformed)
+
+    def test_hrms_staffing_plan_aggregate_adds_group_by(self):
+        query = """SELECT DISTINCT spd.parent, sp.from_date as from_date, sp.to_date as to_date, sp.name,
+sum(spd.vacancies) as vacancies, spd.designation
+FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.name"""
+        transformed = normalize_hrms_staffing_plan_aggregate(query)
+        self.assertIn("GROUP BY spd.parent, sp.from_date, sp.to_date, sp.name, spd.designation", transformed)
+
+    def test_hrms_income_tax_salary_slip_name_is_aggregated(self):
+        query = """SELECT "tabSalary Slip"."name","tabSalary Slip"."employee",
+"tabSalary Detail"."salary_component",SUM("tabSalary Detail"."amount") "amount"
+FROM "tabSalary Slip" INNER JOIN "tabSalary Detail" ON "tabSalary Slip"."name"="tabSalary Detail"."parent"
+GROUP BY "tabSalary Slip"."employee","tabSalary Detail"."salary_component"""
+        transformed = normalize_hrms_income_tax_salary_slip_grouping(query)
+        self.assertIn('MIN("tabSalary Slip"."name") AS "name"', transformed)
+
+    def test_unrelated_double_quoted_identifier_is_unchanged(self):
+        query = 'SELECT * FROM "tabOther" WHERE status="Approved"'
+        self.assertEqual(normalize_hrms_legacy_string_literals(query), query)
 
     def test_hrms_shift_assignment_empty_end_date_becomes_null(self):
         query = (
