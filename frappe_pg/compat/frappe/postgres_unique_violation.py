@@ -58,8 +58,8 @@ def apply():
     def compatible_is_unique_key_violation(exc):
         return database.is_duplicate_entry(exc) and not database.is_primary_key_violation(exc)
 
-    _patched_is_unique_key_violation = staticmethod(compatible_is_unique_key_violation)
-    database.is_unique_key_violation = _patched_is_unique_key_violation  # nosemgrep
+    _patched_is_unique_key_violation = compatible_is_unique_key_violation
+    database.is_unique_key_violation = staticmethod(compatible_is_unique_key_violation)  # nosemgrep
     return True
 
 
@@ -68,7 +68,7 @@ def remove():
     database = _load_postgres_database()
     if database is None or not is_applied():
         return False
-    database.is_unique_key_violation = _original_is_unique_key_violation  # nosemgrep
+    database.is_unique_key_violation = staticmethod(_original_is_unique_key_violation)  # nosemgrep
     _original_is_unique_key_violation = None
     _patched_is_unique_key_violation = None
     return True
