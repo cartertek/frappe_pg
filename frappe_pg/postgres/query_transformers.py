@@ -842,11 +842,16 @@ def normalize_hrms_shift_assignment_empty_end_date(query):
     """
     if not re.search(r'\bFROM\s+"tabShift Assignment"', query, re.IGNORECASE):
         return query
-    pattern = re.compile(
+    literal_pattern = re.compile(
         r'(?P<field>(?:"tabShift Assignment"\.)?"end_date")\s*=\s*\'\'',
         re.IGNORECASE,
     )
-    return pattern.sub(r'\g<field> IS NULL', query)
+    query = literal_pattern.sub(r'\g<field> IS NULL', query)
+    parameter_pattern = re.compile(
+        r'(?P<field>(?:"tabShift Assignment"\.)?"end_date")\s*=\s*%\([A-Za-z_][A-Za-z0-9_]*\)s',
+        re.IGNORECASE,
+    )
+    return parameter_pattern.sub(r'\g<field> IS NULL', query)
 
 
 def normalize_hrms_skill_assessment_group_order(query):
