@@ -39,7 +39,7 @@ ISOLATED_GROUPS = {
     },
 }
 
-REMAINDER_COUNTS = {"erpnext": 3, "hrms": 2}
+REMAINDER_COUNTS = {"erpnext": 6, "hrms": 4}
 
 
 def relative_test_path(app, test_file):
@@ -102,7 +102,11 @@ class SelectedAppTestRunner(ParallelTestRunner):
             missing = [path for path in requested if path not in by_path]
             if missing:
                 raise RuntimeError(f"Missing expected {app} test files: {', '.join(missing)}")
-            return [by_path[path] for path in requested]
+            selected = [by_path[path] for path in requested]
+            print(f"Selected {len(selected)} {app} test files for {self.group}:")
+            for test in selected:
+                print(f"  {relative_test_path(app, test)}")
+            return selected
 
         remainder = [test for test in tests if relative_test_path(app, test) not in isolated_paths(app)]
         shard_count = REMAINDER_COUNTS[app]
@@ -114,7 +118,11 @@ class SelectedAppTestRunner(ParallelTestRunner):
         weights = [weight_fn(test) for test in remainder]
         chunks = split_by_weight(remainder, weights, chunk_count=shard_count)
         validate_chunks(app, remainder, chunks)
-        return chunks[int(self.group.rsplit("-", 1)[1]) - 1]
+        selected = chunks[int(self.group.rsplit("-", 1)[1]) - 1]
+        print(f"Selected {len(selected)} {app} test files for {self.group}:")
+        for test in selected:
+            print(f"  {relative_test_path(app, test)}")
+        return selected
 
 
 def main():
