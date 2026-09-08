@@ -679,6 +679,27 @@ def convert_mysql_double_quoted_literals(query):
     return in_list.sub(replace_in_list, query)
 
 
+def convert_mysql_inner_join_without_condition(query):
+    """Translate MySQL INNER JOIN-without-condition into PostgreSQL CROSS JOIN.
+
+    MySQL permits ``INNER JOIN table alias`` without ``ON``/``USING`` and
+    treats it as a cross join. PostgreSQL requires a join condition for INNER
+    JOIN. Restrict this to a joined table followed directly by a clause boundary
+    so conditioned joins are never changed.
+    """
+    pattern = re.compile(
+        r'\bINNER\s+JOIN\s+(?P<table>"(?:[^"]|"")+"(?:\."(?:[^"]|"")+")*)'
+        r'(?P<alias>\s+(?:AS\s+)?[A-Za-z_][A-Za-z0-9_$]*)?'
+        r'(?P<space>\s+)(?P<next>WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT|UNION)\b',
+        re.IGNORECASE,
+    )
+
+    def replace(match):
+        return f'CROSS JOIN {match.group("table")}{match.group("alias") or ""}{match.group("space")}{match.group("next")}'
+
+    return pattern.sub(replace, query)
+
+
 def convert_mysql_update_join(query):
     """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
 
@@ -762,6 +783,7 @@ def apply_all_query_transformations(query):
     query = remove_erpnext_inventory_dimension_default_order(query)
     query = convert_numeric_truthiness(query)
     query = convert_mysql_double_quoted_literals(query)
+    query = convert_mysql_inner_join_without_condition(query)
     query = convert_mysql_update_join(query)
 
     # Debug: Log if IF() is still present after transformation
