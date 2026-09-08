@@ -496,3 +496,90 @@ class TestPostgresBooleanValuesCompatibility(unittest.TestCase):
         with patch.object(postgres_boolean_values, "_load_targets", return_value=(terms, postgres)):
             self.assertFalse(postgres_boolean_values.is_needed())
             self.assertFalse(postgres_boolean_values.apply())
+
+
+class TestPostgresDateFunctionsCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.frappe import postgres_date_functions
+
+        postgres_date_functions._original_initializers.clear()
+        postgres_date_functions._patched_initializers.clear()
+
+    @staticmethod
+    def _module():
+        class Function:
+            def __init__(self, name, *args, alias=None):
+                self.name = name
+                self.args = args
+                self.alias = alias
+
+        class MonthName(Function):
+            def __init__(self, field, alias=None):
+                super().__init__("MONTHNAME", field, alias=alias)
+
+        class Month(Function):
+            def __init__(self, field, alias=None):
+                super().__init__("MONTH", field, alias=alias)
+
+        class Quarter(Function):
+            def __init__(self, field, alias=None):
+                super().__init__("QUARTER", field, alias=alias)
+
+        return types.SimpleNamespace(
+            Function=Function,
+            MonthName=MonthName,
+            Month=Month,
+            Quarter=Quarter,
+        )
+
+    def test_postgres_uses_database_aware_functions_and_remove_restores(self):
+        from frappe_pg.compat.frappe import postgres_date_functions
+
+        module = self._module()
+        originals = {name: getattr(module, name).__init__ for name in ("MonthName", "Month", "Quarter")}
+        with (
+            patch.object(postgres_date_functions, "_load_custom_module", return_value=module),
+            patch.object(postgres_date_functions, "_is_postgres", return_value=True),
+        ):
+            self.assertTrue(postgres_date_functions.is_needed())
+            self.assertTrue(postgres_date_functions.apply())
+            self.assertEqual(module.MonthName("date").name, "to_char")
+            self.assertEqual(module.MonthName("date").args, ("date", "FMMonth"))
+            self.assertEqual(module.Month("date").name, "date_part")
+            self.assertEqual(module.Month("date").args, ("month", "date"))
+            self.assertEqual(module.Quarter("date").args, ("quarter", "date"))
+            self.assertFalse(postgres_date_functions.apply())
+            self.assertTrue(postgres_date_functions.remove())
+            for name, original in originals.items():
+                self.assertIs(getattr(module, name).__init__, original)
+
+    def test_mariadb_still_uses_native_functions(self):
+        from frappe_pg.compat.frappe import postgres_date_functions
+
+        module = self._module()
+        with (
+            patch.object(postgres_date_functions, "_load_custom_module", return_value=module),
+            patch.object(postgres_date_functions, "_is_postgres", return_value=False),
+        ):
+            self.assertTrue(postgres_date_functions.apply())
+            self.assertEqual(module.MonthName("date").name, "MONTHNAME")
+            self.assertEqual(module.Month("date").name, "MONTH")
+            self.assertEqual(module.Quarter("date").name, "QUARTER")
+            self.assertTrue(postgres_date_functions.remove())
+
+    def test_fixed_upstream_is_left_untouched(self):
+        from frappe_pg.compat.frappe import postgres_date_functions
+
+        module = self._module()
+
+        def fixed_init(self, field, alias=None):
+            if _is_postgres():  # noqa: F821
+                return self.to_char(field) or self.date_part(field)
+            return None
+
+        for name in ("MonthName", "Month", "Quarter"):
+            getattr(module, name).__init__ = fixed_init
+
+        with patch.object(postgres_date_functions, "_load_custom_module", return_value=module):
+            self.assertFalse(postgres_date_functions.is_needed())
+            self.assertFalse(postgres_date_functions.apply())
