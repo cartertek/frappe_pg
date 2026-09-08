@@ -184,7 +184,8 @@ class TestQueryTransformers(unittest.TestCase):
             bom_item.include_item_in_manufacturing, bom_item.description, bom_item.rate,
             bom_item.sourced_by_supplier,
             (Select idx from "tabBOM Item" where item_code = bom_item.item_code and parent = %(parent)s limit 1) as idx
-        from "tabBOM Explosion Item" bom_item
+        from
+            "tabBOM Explosion Item" bom_item
         JOIN "tabBOM" bom ON bom_item.parent = bom.name
         JOIN "tabItem" item ON item.name = bom_item.item_code
         LEFT JOIN "tabItem Default" item_default
