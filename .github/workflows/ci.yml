@@ -331,13 +331,6 @@ jobs:
             test_group: auth
           - frappe: version-15
             app: frappe
-            label: Frappe v15 / seen
-            python: '3.10'
-            node: 18
-            artifact: frappe-bench-v15
-            test_group: seen
-          - frappe: version-15
-            app: frappe
             label: Frappe v15 / email account
             python: '3.10'
             node: 18
@@ -413,13 +406,6 @@ jobs:
             node: 24
             artifact: frappe-bench-v16
             test_group: auth
-          - frappe: version-16
-            app: frappe
-            label: Frappe v16 / seen
-            python: '3.14'
-            node: 24
-            artifact: frappe-bench-v16
-            test_group: seen
           - frappe: version-16
             app: frappe
             label: Frappe v16 / email account

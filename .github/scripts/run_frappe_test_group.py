@@ -14,10 +14,12 @@ ISOLATED_GROUPS = {
         "core/doctype/rq_job/test_rq_job.py",
         "core/doctype/rq_worker/test_rq_worker.py",
     ],
-    "permissions": ["tests/test_permissions.py"],
+    # test_seen relies on roles added by test_permissions and fails in isolation.
+    # Keep them together, in upstream order, so sharding does not expose that
+    # hidden test-order dependency as a PostgreSQL failure.
+    "permissions": ["tests/test_permissions.py", "tests/test_seen.py"],
     "db-query": ["tests/test_db_query.py"],
     "auth": ["tests/test_auth.py"],
-    "seen": ["tests/test_seen.py"],
     "email-account": ["email/doctype/email_account/test_email_account.py"],
     # Frappe moved this module between v15 and v16.
     "commands": ["tests/test_commands.py", "commands/test_commands.py"],
@@ -115,6 +117,29 @@ def patch_v15_command_test(module):
     test_class.test_backup_no_options = guarded_test
 
 
+def patch_v15_doctype_delete_cache():
+    """Backport v16's DocType cache clear after deletion for v15 tests."""
+    from frappe.model import delete_doc as delete_doc_module
+
+    original = delete_doc_module.delete_doc
+    try:
+        source = inspect.getsource(original)
+    except (OSError, TypeError):
+        return
+    if "frappe.clear_cache(doctype=name)" in source or getattr(original, "_frappe_pg_cache_guard", False):
+        return
+
+    def delete_doc_with_cache(doctype, name, *args, **kwargs):
+        result = original(doctype, name, *args, **kwargs)
+        if doctype == "DocType":
+            frappe.clear_cache(doctype=name)
+        return result
+
+    delete_doc_with_cache._frappe_pg_cache_guard = True
+    delete_doc_module.delete_doc = delete_doc_with_cache
+    frappe.delete_doc = delete_doc_with_cache
+
+
 def validate_chunks(remainder, chunks):
     remainder_paths = {relative_test_path(test) for test in remainder}
     chunk_paths = [{relative_test_path(test) for test in chunk} for chunk in chunks]
@@ -190,6 +215,7 @@ def main():
 
     print(f"Running Frappe test group {args.group}")
     patch_v15_query_count_helper()
+    patch_v15_doctype_delete_cache()
     runner = SelectedTestRunner(site=args.site, group=args.group)
     # v15 runs during ParallelTestRunner.__init__; v16+ separates construction
     # from execution behind setup_and_run().
