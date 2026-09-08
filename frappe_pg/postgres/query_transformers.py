@@ -441,6 +441,16 @@ def convert_numeric_truthiness(query):
         # ``("claimed_amount" AND "return_amount")`` query-builder output.
         if match.group("prefix") == "(" and match.group("suffix") == ")":
             return match.group(0)
+
+        # In ``value BETWEEN lower AND upper`` the AND token is part of the
+        # BETWEEN operator, not a boolean conjunction. Treating the upper bound
+        # as a truthy numeric operand corrupts valid date/number ranges.
+        if match.group("prefix").upper() == "AND":
+            before = query[: match.start()]
+            tail = re.split(r"\b(?:WHERE|HAVING|ON|OR|AND)\b|[()]", before, flags=re.IGNORECASE)[-1]
+            if re.search(r"\bBETWEEN\b", tail, re.IGNORECASE):
+                return match.group(0)
+
         return f'{match.group("prefix")}{match.group("space")}' f'({match.group("identifier")} <> 0)'
 
     # Re-run until nested shapes such as ("claimed_amount" AND "return_amount")
