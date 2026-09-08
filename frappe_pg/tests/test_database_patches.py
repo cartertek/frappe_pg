@@ -18,6 +18,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_zero_date_sentinel,
     convert_numeric_truthiness,
     expand_mysql_having_alias,
+    normalize_erpnext_v15_bom_group_query,
     remove_erpnext_inventory_dimension_default_order,
     remove_index_hints,
     remove_order_by_from_aggregate_only_query,
@@ -144,6 +145,45 @@ class TestQueryTransformers(unittest.TestCase):
         for query in cases:
             with self.subTest(query=query):
                 self.assertEqual(remove_order_by_from_aggregate_only_query(query), query)
+
+    def test_erpnext_v15_exploded_bom_group_query_is_normalized(self):
+        query = """select
+            bom_item.item_code,
+            bom_item.idx,
+            item.item_name,
+            sum(bom_item.stock_qty/coalesce(bom.quantity, 1)) * 10.0 as qty,
+            item.image,
+            bom.project,
+            bom_item.rate,
+            sum(bom_item.stock_qty/coalesce(bom.quantity, 1)) * bom_item.rate * 10.0 as amount,
+            item.stock_uom,
+            item.item_group,
+            item.allow_alternative_item,
+            item_default.default_warehouse,
+            item_default.expense_account as expense_account,
+            item_default.buying_cost_center as cost_center,
+            bom_item.source_warehouse, bom_item.operation,
+            bom_item.include_item_in_manufacturing, bom_item.description, bom_item.rate,
+            bom_item.sourced_by_supplier,
+            (Select idx from "tabBOM Item" where item_code = bom_item.item_code and parent = %(parent)s limit 1) as idx
+        from "tabBOM Explosion Item" bom_item
+        JOIN "tabBOM" bom ON bom_item.parent = bom.name
+        JOIN "tabItem" item ON item.name = bom_item.item_code
+        LEFT JOIN "tabItem Default" item_default
+            ON item_default.parent = item.name and item_default.company = %(company)s
+        where bom_item.docstatus < 2 and bom.name = %(bom)s
+        group by item_code, stock_uom
+        order by idx"""
+        transformed = normalize_erpnext_v15_bom_group_query(query)
+        self.assertIn("MIN(bom_item.idx) AS idx", transformed)
+        self.assertIn("MAX(item.item_name) AS item_name", transformed)
+        self.assertIn("MAX(bom_item.rate) * 10.0 as amount", transformed)
+        self.assertIn("GROUP BY bom_item.item_code, item.stock_uom", transformed)
+        self.assertIn("ORDER BY MIN(bom_item.idx)", transformed)
+
+    def test_unrelated_grouped_query_is_not_touched_by_bom_normalizer(self):
+        query = 'SELECT item_code, idx FROM "tabOther" GROUP BY item_code ORDER BY idx'
+        self.assertEqual(normalize_erpnext_v15_bom_group_query(query), query)
 
     def test_erpnext_inventory_dimension_distinct_drops_only_implicit_modified_order(self):
         query = (
