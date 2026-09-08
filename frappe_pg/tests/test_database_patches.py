@@ -37,6 +37,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_production_plan_subitems_grouping,
     normalize_erpnext_repost_item_grouping,
     normalize_erpnext_reserved_warehouse_distinct,
+    normalize_erpnext_serial_ledger_distinct_order,
     normalize_erpnext_stock_ledger_batch_grouping,
     normalize_erpnext_stock_voucher_group_order,
     normalize_erpnext_unreconcile_payment_grouping,
@@ -117,6 +118,7 @@ class TestQueryTransformers(unittest.TestCase):
             "date_sub(posting_date, interval 2 WEEK)": "posting_date - INTERVAL '2 week'",
             "DATE_SUB(posting_date, INTERVAL 3 MONTH)": "posting_date - INTERVAL '3 month'",
             "CURDATE()": "CURRENT_DATE",
+            "CURRENT_DATE()": "CURRENT_DATE",
         }
         for query, expected in cases.items():
             with self.subTest(query=query):
@@ -722,6 +724,25 @@ class TestQueryTransformers(unittest.TestCase):
         transformed = normalize_erpnext_batch_availability_grouping(query)
         self.assertIn('MAX("tabBatch"."expiry_date") AS "expiry_date"', transformed)
         self.assertIn('ORDER BY MAX("tabBatch"."expiry_date")', transformed)
+
+    def test_serial_ledger_distinct_order_includes_creation(self):
+        query = (
+            'SELECT DISTINCT "tabStock Ledger Entry"."posting_datetime",'
+            '"tabStock Ledger Entry"."actual_qty","tabStock Ledger Entry"."serial_no",'
+            '"tabStock Ledger Entry"."serial_and_batch_bundle" '
+            'FROM "tabStock Ledger Entry" LEFT JOIN "tabSerial and Batch Entry" ON 1=1 '
+            'WHERE "tabStock Ledger Entry"."is_cancelled"=0 '
+            'ORDER BY "tabStock Ledger Entry"."posting_datetime",'
+            '"tabStock Ledger Entry"."creation"'
+        )
+        transformed = normalize_erpnext_serial_ledger_distinct_order(query)
+        select_part = transformed.split(" FROM ", 1)[0]
+        self.assertIn('"tabStock Ledger Entry"."creation"', select_part)
+        self.assertEqual(normalize_erpnext_serial_ledger_distinct_order(transformed), transformed)
+
+    def test_unrelated_distinct_order_is_unchanged(self):
+        query = 'SELECT DISTINCT "warehouse" FROM "tabStock Ledger Entry" ORDER BY "creation"'
+        self.assertEqual(normalize_erpnext_serial_ledger_distinct_order(query), query)
 
     def test_stock_ledger_batch_grouping_matches_develop(self):
         query = (
