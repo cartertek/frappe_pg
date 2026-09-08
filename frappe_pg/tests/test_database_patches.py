@@ -37,6 +37,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_production_plan_subitems_grouping,
     normalize_erpnext_repost_item_grouping,
     normalize_erpnext_reserved_warehouse_distinct,
+    normalize_erpnext_stock_ledger_batch_grouping,
     normalize_erpnext_stock_voucher_group_order,
     normalize_erpnext_unreconcile_payment_grouping,
     normalize_erpnext_v15_bom_group_query,
@@ -721,6 +722,25 @@ class TestQueryTransformers(unittest.TestCase):
         transformed = normalize_erpnext_batch_availability_grouping(query)
         self.assertIn('MAX("tabBatch"."expiry_date") AS "expiry_date"', transformed)
         self.assertIn('ORDER BY MAX("tabBatch"."expiry_date")', transformed)
+
+    def test_stock_ledger_batch_grouping_matches_develop(self):
+        query = (
+            'SELECT "tabStock Ledger Entry"."warehouse","tabStock Ledger Entry"."item_code",'
+            'SUM("tabStock Ledger Entry"."actual_qty") "qty","tabStock Ledger Entry"."batch_no",'
+            '"tabBatch"."expiry_date" FROM "tabStock Ledger Entry" '
+            'INNER JOIN "tabBatch" ON "tabStock Ledger Entry"."batch_no"="tabBatch"."name" '
+            'GROUP BY "tabStock Ledger Entry"."batch_no","tabStock Ledger Entry"."warehouse" '
+            'ORDER BY "tabBatch"."expiry_date"'
+        )
+        transformed = normalize_erpnext_stock_ledger_batch_grouping(query)
+        self.assertIn('MAX("tabStock Ledger Entry"."item_code") AS "item_code"', transformed)
+        self.assertIn('MAX("tabBatch"."expiry_date") AS "expiry_date"', transformed)
+        self.assertIn('ORDER BY MAX("tabBatch"."expiry_date")', transformed)
+        self.assertEqual(normalize_erpnext_stock_ledger_batch_grouping(transformed), transformed)
+
+    def test_unrelated_stock_ledger_grouping_is_unchanged(self):
+        query = 'SELECT SUM("actual_qty") FROM "tabStock Ledger Entry" GROUP BY "warehouse"'
+        self.assertEqual(normalize_erpnext_stock_ledger_batch_grouping(query), query)
 
     def test_unreconcile_payment_aggregates_dependent_fields(self):
         query = (
