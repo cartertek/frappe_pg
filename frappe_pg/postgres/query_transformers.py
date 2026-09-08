@@ -515,6 +515,34 @@ def normalize_erpnext_v15_bom_group_query(query):
     )
 
 
+def qualify_frappe_grouped_order_aggregate(query):
+    """Restore the table qualifier lost by Frappe's PostgreSQL GROUP BY helper.
+
+    DatabaseQuery.prepare_select_args() carries a qualified ORDER BY field into
+    the SELECT list as ``MAX(modified) AS `tabDoctype.modified``` but strips the
+    qualifier from the MAX argument. With joined tables that makes ``modified``
+    ambiguous. The generated alias preserves the exact original qualified field,
+    so use it to restore the qualifier without guessing which table is intended.
+    """
+    if not re.search(r'\bGROUP\s+BY\b', query, re.IGNORECASE):
+        return query
+    pattern = re.compile(
+        r'\bMAX\s*\(\s*["`]?(?P<column>[A-Za-z_][A-Za-z0-9_]*)["`]?\s*\)'
+        r'(?P<alias_space>\s+AS\s+)'
+        r'(?P<quote>["`])(?P<table>tab[^"`]+)\.(?P=column)(?P=quote)',
+        re.IGNORECASE,
+    )
+
+    def replace(match):
+        column = match.group("column")
+        quote = '"'
+        alias_quote = match.group("quote")
+        alias = f'{alias_quote}{match.group("table")}.{column}{alias_quote}'
+        return f'MAX({quote}{match.group("table")}{quote}.{quote}{column}{quote}){match.group("alias_space")}{alias}'
+
+    return pattern.sub(replace, query)
+
+
 def remove_erpnext_inventory_dimension_default_order(query):
     """Remove Frappe's implicit modified ordering from ERPNext's DISTINCT inventory-dimension query.
 
@@ -1078,6 +1106,7 @@ def apply_all_query_transformations(query):
     query = expand_mysql_having_alias(query)
     query = remove_order_by_from_aggregate_only_query(query)
     query = normalize_erpnext_v15_bom_group_query(query)
+    query = qualify_frappe_grouped_order_aggregate(query)
     query = remove_erpnext_inventory_dimension_default_order(query)
     query = convert_numeric_truthiness(query)
     query = convert_mysql_double_quoted_literals(query)
