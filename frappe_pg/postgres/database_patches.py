@@ -14,7 +14,7 @@ import uuid
 
 import frappe
 from frappe.database.postgres.database import PostgresDatabase
-from frappe.database.postgres.schema import PostgresSchema
+from frappe.database.postgres.schema import PostgresTable
 from frappe.model.base_document import BaseDocument
 
 from .db_functions import create_missing_functions
@@ -161,7 +161,7 @@ def apply_postgres_fixes():
     _original_transform_query = PostgresDatabase._transform_query
     _original_transform_result = PostgresDatabase._transform_result
     _original_is_deadlocked = PostgresDatabase.is_deadlocked
-    _original_schema_alter = PostgresSchema.alter
+    _original_schema_alter = PostgresTable.alter
     _original_db_insert = BaseDocument.db_insert
     # nosemgrep
     PostgresDatabase._transform_query = patched_transform_query  # nosemgrep
@@ -170,7 +170,7 @@ def apply_postgres_fixes():
     # nosemgrep
     PostgresDatabase.is_deadlocked = staticmethod(patched_is_deadlocked)  # nosemgrep
     # nosemgrep
-    PostgresSchema.alter = patched_schema_alter  # nosemgrep
+    PostgresTable.alter = patched_schema_alter  # nosemgrep
     # nosemgrep
     BaseDocument.db_insert = patched_db_insert  # nosemgrep
     _patches_applied = True
@@ -192,9 +192,9 @@ def remove_postgres_fixes():
     if PostgresDatabase.is_deadlocked == patched_is_deadlocked:
         # nosemgrep
         PostgresDatabase.is_deadlocked = staticmethod(_original_is_deadlocked)  # nosemgrep
-    if PostgresSchema.alter == patched_schema_alter:
+    if PostgresTable.alter == patched_schema_alter:
         # nosemgrep
-        PostgresSchema.alter = _original_schema_alter  # nosemgrep
+        PostgresTable.alter = _original_schema_alter  # nosemgrep
     if BaseDocument.db_insert == patched_db_insert:
         # nosemgrep
         BaseDocument.db_insert = _original_db_insert  # nosemgrep
