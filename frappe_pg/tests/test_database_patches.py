@@ -254,6 +254,25 @@ class TestTransformQueryHook(unittest.TestCase):
         self.assertNotEqual(PostgresDatabase._transform_query.__module__, PostgresDatabase.sql.__module__)
         self.assertIs(PostgresDatabase._transform_query, database_patches.patched_transform_query)
 
+    def test_postgres_json_results_are_serialized_like_mariadb(self):
+        class Column:
+            def __init__(self, type_code):
+                self.type_code = type_code
+
+        result = ((["a", "b"], {"enabled": True}, [1, 2], "plain"),)
+        description = [Column(114), Column(3802), Column(1009), Column(25)]
+        self.assertEqual(
+            database_patches._serialize_json_cells(result, description),
+            (('["a", "b"]', '{"enabled": true}', [1, 2], "plain"),),
+        )
+
+    def test_non_json_results_are_unchanged(self):
+        class Column:
+            type_code = 1009
+
+        result = ((["a", "b"],),)
+        self.assertIs(database_patches._serialize_json_cells(result, [Column()]), result)
+
     def test_postgres_serialization_failure_is_classified_as_deadlock(self):
         class SerializationFailure(Exception):
             pgcode = "40001"
