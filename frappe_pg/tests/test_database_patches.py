@@ -180,6 +180,21 @@ class TestQueryTransformers(unittest.TestCase):
         query = 'SELECT * FROM "tabExample" WHERE "name" = "other_column"'
         self.assertEqual(convert_mysql_double_quoted_literals(query), query)
 
+    def test_double_quoted_mysql_string_literals_in_legacy_in_list(self):
+        query = (
+            'SELECT * FROM "tabSingles" WHERE field in ('
+            '"encrypt_salary_slips_in_emails", "email_salary_slip_to_employee", "password_policy")'
+        )
+        expected = (
+            'SELECT * FROM "tabSingles" WHERE field in ('
+            "'encrypt_salary_slips_in_emails', 'email_salary_slip_to_employee', 'password_policy')"
+        )
+        self.assertEqual(convert_mysql_double_quoted_literals(query), expected)
+
+    def test_quoted_identifier_in_list_is_not_rewritten(self):
+        query = 'SELECT * FROM "tabExample" WHERE "name" IN ("other_column", "another_column")'
+        self.assertEqual(convert_mysql_double_quoted_literals(query), query)
+
     def test_double_quoted_qualified_identifier_with_spaces_is_unchanged(self):
         query = (
             'SELECT "tabWeb Page"."route" FROM "tabWeb Page" '
@@ -237,6 +252,25 @@ class TestTransformQueryHook(unittest.TestCase):
         self.assertEqual(PostgresDatabase.rollback.__module__, "frappe.database.database")
         self.assertNotEqual(PostgresDatabase._transform_query.__module__, PostgresDatabase.sql.__module__)
         self.assertIs(PostgresDatabase._transform_query, database_patches.patched_transform_query)
+
+    def test_postgres_json_results_are_serialized_like_mariadb(self):
+        class Column:
+            def __init__(self, type_code):
+                self.type_code = type_code
+
+        result = ((["a", "b"], {"enabled": True}, [1, 2], "plain"),)
+        description = [Column(114), Column(3802), Column(1009), Column(25)]
+        self.assertEqual(
+            database_patches._serialize_json_cells(result, description),
+            (('["a", "b"]', '{"enabled": true}', [1, 2], "plain"),),
+        )
+
+    def test_non_json_results_are_unchanged(self):
+        class Column:
+            type_code = 1009
+
+        result = ((["a", "b"],),)
+        self.assertIs(database_patches._serialize_json_cells(result, [Column()]), result)
 
     def test_postgres_serialization_failure_is_classified_as_deadlock(self):
         class SerializationFailure(Exception):
