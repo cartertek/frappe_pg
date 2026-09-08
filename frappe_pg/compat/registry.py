@@ -1,10 +1,16 @@
 """Registry for narrowly scoped application-level PostgreSQL compatibility overrides."""
 
 from frappe_pg.compat.erpnext import trends_group_by
-from frappe_pg.compat.frappe import goal_aggregation, schema_type_conversion, unique_insert_transaction
+from frappe_pg.compat.frappe import (
+    goal_aggregation,
+    postgres_decimal_metadata,
+    schema_type_conversion,
+    unique_insert_transaction,
+)
 
 _COMPATIBILITY_OVERRIDES = (
     goal_aggregation,
+    postgres_decimal_metadata,
     schema_type_conversion,
     unique_insert_transaction,
     trends_group_by,
