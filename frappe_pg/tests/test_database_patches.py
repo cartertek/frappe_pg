@@ -11,6 +11,7 @@ from frappe_pg.postgres.query_transformers import (
     apply_all_query_transformations,
     cast_timestamp_pattern_matches,
     convert_date_format,
+    convert_erpnext_customer_suffix_unsigned,
     convert_if_to_case,
     convert_ifnull_to_coalesce,
     convert_mysql_date_arithmetic,
@@ -21,6 +22,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_numeric_truthiness,
     expand_mysql_having_alias,
     normalize_erpnext_advance_payment_currency_aggregate,
+    normalize_erpnext_bank_clearance_journal_query,
     normalize_erpnext_item_end_of_life_zero_date,
     normalize_erpnext_landed_cost_center_aggregate,
     normalize_erpnext_negative_invoice_voucher_literal,
@@ -347,6 +349,47 @@ class TestQueryTransformers(unittest.TestCase):
             'SELECT "tabBOM Item"."item_code",COUNT(*) FROM "tabBOM Item" GROUP BY "tabBOM Item"."item_code"'
         )
         self.assertEqual(normalize_erpnext_production_plan_subitems_grouping(query), query)
+
+    def test_erpnext_bank_clearance_journal_grouping_matches_develop(self):
+        query = (
+            'SELECT "Journal Entry" "payment_document","tabJournal Entry"."name" "payment_entry",'
+            '"tabJournal Entry"."cheque_no" "cheque_number","tabJournal Entry"."cheque_date",'
+            'SUM("tabJournal Entry Account"."debit_in_account_currency") "debit",'
+            'SUM("tabJournal Entry Account"."credit_in_account_currency") "credit",'
+            '"tabJournal Entry"."posting_date","tabJournal Entry Account"."against_account",'
+            '"tabJournal Entry"."clearance_date","tabJournal Entry Account"."account_currency" '
+            'FROM "tabJournal Entry Account" JOIN "tabJournal Entry" '
+            'ON "tabJournal Entry Account"."parent"="tabJournal Entry"."name" '
+            'WHERE ("tabJournal Entry"."clearance_date" IS NULL OR '
+            '"tabJournal Entry"."clearance_date"=\'0000-00-00\') '
+            'GROUP BY "tabJournal Entry Account"."account","tabJournal Entry"."name" '
+            'ORDER BY "tabJournal Entry"."posting_date"'
+        )
+        transformed = normalize_erpnext_bank_clearance_journal_query(query)
+        self.assertIn('MAX("tabJournal Entry"."cheque_no") "cheque_number"', transformed)
+        self.assertIn('MAX("tabJournal Entry Account"."account_currency")', transformed)
+        self.assertIn('"tabJournal Entry"."clearance_date" IS NULL', transformed)
+        self.assertNotIn("'0000-00-00'", transformed)
+        self.assertIn('ORDER BY MAX("tabJournal Entry"."posting_date")', transformed)
+
+    def test_unrelated_journal_group_query_is_unchanged(self):
+        query = 'SELECT COUNT(*) FROM "tabJournal Entry" GROUP BY "company"'
+        self.assertEqual(normalize_erpnext_bank_clearance_journal_query(query), query)
+
+    def test_erpnext_customer_suffix_unsigned_becomes_postgres_expression(self):
+        query = (
+            "SELECT COALESCE(MAX(CAST(SUBSTRING_INDEX(name, ' ', -1) AS UNSIGNED)), 0) "
+            'FROM tabCustomer WHERE name LIKE %s'
+        )
+        transformed = convert_erpnext_customer_suffix_unsigned(query)
+        self.assertIn('regexp_replace', transformed)
+        self.assertIn('AS INTEGER)', transformed)
+        self.assertNotIn('SUBSTRING_INDEX', transformed)
+        self.assertNotIn('UNSIGNED', transformed)
+
+    def test_unsigned_expression_outside_customer_is_unchanged(self):
+        query = "SELECT CAST(SUBSTRING_INDEX(name, ' ', -1) AS UNSIGNED) FROM tabSupplier"
+        self.assertEqual(convert_erpnext_customer_suffix_unsigned(query), query)
 
     def test_erpnext_advance_payment_currency_is_aggregated(self):
         query = (
