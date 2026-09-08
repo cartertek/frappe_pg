@@ -14,6 +14,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_double_quoted_literals,
     convert_mysql_update_join,
     convert_numeric_truthiness,
+    expand_mysql_having_alias,
     remove_index_hints,
 )
 
@@ -84,6 +85,26 @@ class TestQueryTransformers(unittest.TestCase):
         for query in cases:
             with self.subTest(query=query):
                 self.assertEqual(convert_mysql_date_arithmetic(query), query)
+
+    def test_mysql_having_alias_from_frappe_system_health_report(self):
+        query = """
+            select scheduled_job_type,
+                   avg(CASE WHEN status != 'Complete' THEN 1 ELSE 0 END) * 100 as failure_rate
+            from "tabScheduled Job Log"
+            group by scheduled_job_type
+            having failure_rate > '0'
+            order by failure_rate desc
+        """
+        transformed = expand_mysql_having_alias(query)
+        self.assertIn(
+            "having (avg(CASE WHEN status != 'Complete' THEN 1 ELSE 0 END) * 100) > '0'",
+            transformed,
+        )
+        self.assertIn("order by failure_rate desc", transformed)
+
+    def test_mysql_having_unknown_alias_is_unchanged(self):
+        query = "SELECT count(*) AS total FROM tabThing HAVING other_alias > 0"
+        self.assertEqual(expand_mysql_having_alias(query), query)
 
     def test_numeric_truthiness_from_hrms_employee_advance_patch(self):
         query = (
