@@ -726,6 +726,29 @@ def convert_mysql_inner_join_without_condition(query):
     return pattern.sub(replace, query)
 
 
+def normalize_erpnext_landed_cost_center_aggregate(query):
+    """Match ERPNext's PostgreSQL-safe landed-cost aggregate.
+
+    Older ERPNext selects ``SUM(applicable_charges), cost_center`` without a
+    GROUP BY. MariaDB accepts that permissively; PostgreSQL does not. ERPNext
+    develop fixes the query by aggregating ``cost_center`` with ``MAX``.
+    Restrict the rewrite to the Landed Cost Item query shape.
+    """
+    if not re.search(r'\bFROM\s+"tabLanded Cost Item"', query, re.IGNORECASE):
+        return query
+    pattern = re.compile(
+        r'(?P<sum>SUM\s*\(\s*(?P<prefix>(?:"tabLanded Cost Item"\.)?)"?applicable_charges"?\s*\))'
+        r'(?P<comma>\s*,\s*)'
+        r'(?P<center>(?P=prefix)"?cost_center"?)',
+        re.IGNORECASE,
+    )
+    return pattern.sub(
+        lambda match: f'{match.group("sum")}{match.group("comma")}MAX({match.group("center")})',
+        query,
+        count=1,
+    )
+
+
 def convert_mysql_update_join(query):
     """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
 
@@ -812,6 +835,7 @@ def apply_all_query_transformations(query):
     query = normalize_payment_request_single_match_grouping(query)
     query = cast_timestamp_pattern_matches(query)
     query = convert_mysql_inner_join_without_condition(query)
+    query = normalize_erpnext_landed_cost_center_aggregate(query)
     query = convert_mysql_update_join(query)
 
     # Debug: Log if IF() is still present after transformation
