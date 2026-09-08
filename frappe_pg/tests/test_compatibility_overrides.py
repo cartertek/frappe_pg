@@ -270,8 +270,8 @@ class TestPostgresDecimalMetadataCompatibility(unittest.TestCase):
     def tearDown(self):
         from frappe_pg.compat.frappe import postgres_decimal_metadata
 
-        postgres_decimal_metadata._original_get_table_columns_description = None
-        postgres_decimal_metadata._patched_get_table_columns_description = None
+        postgres_decimal_metadata._original_get_column_type = None
+        postgres_decimal_metadata._patched_get_column_type = None
 
     def test_detects_native_precision_reporting(self):
         from frappe_pg.compat.frappe import postgres_decimal_metadata
