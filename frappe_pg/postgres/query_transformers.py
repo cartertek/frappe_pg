@@ -428,33 +428,6 @@ def convert_mysql_double_quoted_literals(query):
     query = whitespace_literal.sub(replace_whitespace, query)
     query = bare_field_literal.sub(replace_bare_field, query)
     return in_list.sub(replace_in_list, query)
-    )
-
-    def replace_whitespace(match):
-        value = match.group("value").replace("'", "''")
-        return f'{match.group("operator")}{match.group("space")}\'{value}\''
-
-<<<<<<< HEAD
-    def replace_bare_field(match):
-        value = match.group("value").replace("'", "''")
-        return (
-            f'{match.group("field")}{match.group("before")}{match.group("operator")}'
-            f'{match.group("after")}\'{value}\''
-        )
-
-    query = whitespace_literal.sub(replace_whitespace, query)
-    return bare_field_literal.sub(replace_bare_field, query)
-=======
-    def replace_in_list(match):
-        parts = [part.strip() for part in match.group("values").split(",")]
-        if not parts or any(not re.fullmatch(r'"[^"\r\n]*"', part) for part in parts):
-            return match.group(0)
-        values = ", ".join("'" + part[1:-1].replace("'", "''") + "'" for part in parts)
-        return f'{match.group("field")}{match.group("space")}{values})'
-
-    query = literal.sub(replace, query)
-    return in_list.sub(replace_in_list, query)
->>>>>>> 3819cc1 (fix: translate hrms legacy string lists)
 
 
 def convert_mysql_update_join(query):
