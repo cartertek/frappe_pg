@@ -1504,6 +1504,29 @@ def normalize_erpnext_reserved_warehouse_distinct(query):
     )
 
 
+def remove_mysql_order_by_null(query):
+    """Drop MySQL's ``ORDER BY NULL`` no-ordering idiom."""
+    return re.sub(
+        r"\s+ORDER\s+BY\s+NULL(?=\s*(?:LIMIT\b|OFFSET\b|FOR\b|$))",
+        "",
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
+def convert_mysql_limit_offset(query):
+    """Translate MySQL ``LIMIT offset, count`` to PostgreSQL LIMIT/OFFSET."""
+    value = r"(?:%\([A-Za-z_][A-Za-z0-9_]*\)s|%s|\d+)"
+    pattern = re.compile(
+        rf"\bLIMIT\s+(?P<offset>{value})\s*,\s*(?P<count>{value})",
+        re.IGNORECASE,
+    )
+    return pattern.sub(
+        lambda match: f'LIMIT {match.group("count")} OFFSET {match.group("offset")}',
+        query,
+    )
+
+
 def convert_mysql_update_join(query):
     """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
 
@@ -1584,6 +1607,8 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_item_end_of_life_zero_date(query)
     query = expand_mysql_having_alias(query)
     query = remove_order_by_from_aggregate_only_query(query)
+    query = remove_mysql_order_by_null(query)
+    query = convert_mysql_limit_offset(query)
     query = normalize_erpnext_v15_bom_group_query(query)
     query = normalize_erpnext_bom_items_grouping(query)
     query = qualify_frappe_grouped_order_aggregate(query)

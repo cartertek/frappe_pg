@@ -18,6 +18,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_datediff,
     convert_mysql_double_quoted_literals,
     convert_mysql_inner_join_without_condition,
+    convert_mysql_limit_offset,
     convert_mysql_regexp_operator,
     convert_mysql_timestamp_pair,
     convert_mysql_update_join,
@@ -48,6 +49,7 @@ from frappe_pg.postgres.query_transformers import (
     qualify_frappe_grouped_order_aggregate,
     remove_erpnext_inventory_dimension_default_order,
     remove_index_hints,
+    remove_mysql_order_by_null,
     remove_order_by_from_aggregate_only_query,
 )
 
@@ -839,6 +841,23 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         self.assertNotIn('SELECT DISTINCT', transformed)
         self.assertIn('GROUP BY "tabStock Reservation Entry"."warehouse"', transformed)
         self.assertIn('ORDER BY MIN("tabStock Reservation Entry"."creation")', transformed)
+
+    def test_mysql_order_by_null_is_removed(self):
+        query = 'SELECT parent FROM "tabItem Variant Attribute" GROUP BY parent ORDER BY NULL'
+        self.assertEqual(
+            remove_mysql_order_by_null(query),
+            'SELECT parent FROM "tabItem Variant Attribute" GROUP BY parent',
+        )
+
+    def test_mysql_limit_offset_is_reordered(self):
+        self.assertEqual(
+            convert_mysql_limit_offset('SELECT name FROM "tabItem" LIMIT %(start)s, %(page_len)s'),
+            'SELECT name FROM "tabItem" LIMIT %(page_len)s OFFSET %(start)s',
+        )
+        self.assertEqual(
+            convert_mysql_limit_offset('SELECT name FROM t LIMIT 10, 20'),
+            'SELECT name FROM t LIMIT 20 OFFSET 10',
+        )
 
     def test_simple_mysql_update_join(self):
         query = (
