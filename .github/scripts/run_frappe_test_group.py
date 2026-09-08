@@ -133,7 +133,7 @@ def patch_v15_fixture_import_test(module):
     def compatible_test(self):
         self.assertFalse(frappe.db.exists("DocType", "temp_doctype"))
         self.create_new_doctype("temp_doctype")
-        frappe.db.commit()
+        frappe.db.commit()  # v16 commits the newly created DocType before fixture DML; nosemgrep
 
         dummy_names = ["jhon", "jane"]
         path = self.insert_dummy_data_and_export("temp_doctype", dummy_names)
@@ -146,7 +146,7 @@ def patch_v15_fixture_import_test(module):
         self.assertEqual(set(dummy_names), {row["member_name"] for row in data})
 
         module.delete_doc("DocType", "temp_doctype", delete_permanently=True)
-        frappe.db.commit()
+        frappe.db.commit()  # v16 commits permanent DocType deletion before removing the exported fixture; nosemgrep
         module.os.remove(path)
 
     compatible_test._frappe_pg_fixture_guard = True
