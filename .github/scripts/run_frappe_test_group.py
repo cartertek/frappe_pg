@@ -14,6 +14,7 @@ ISOLATED_GROUPS = {
     "permissions": ["tests/test_permissions.py"],
     "db-query": ["tests/test_db_query.py"],
     "commands": ["commands/test_commands.py"],
+    "user-invitation": ["core/doctype/user_invitation/test_user_invitation.py"],
 }
 REMAINDER_GROUPS = {"remainder", "remainder-1", "remainder-2"}
 

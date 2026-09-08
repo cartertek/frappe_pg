@@ -250,6 +250,12 @@ jobs:
             node: 18
             test_group: commands
           - frappe: version-15
+            app: frappe
+            label: Frappe v15 / user invitation
+            python: '3.10'
+            node: 18
+            test_group: user-invitation
+          - frappe: version-15
             app: erpnext
             app_branch: version-15
             label: ERPNext v15
@@ -263,10 +269,16 @@ jobs:
             node: 18
           - frappe: version-16
             app: frappe
-            label: Frappe v16 / remainder
+            label: Frappe v16 / remainder 1
             python: '3.14'
             node: 24
-            test_group: remainder
+            test_group: remainder-1
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / remainder 2
+            python: '3.14'
+            node: 24
+            test_group: remainder-2
           - frappe: version-16
             app: frappe
             label: Frappe v16 / webhook
@@ -297,6 +309,12 @@ jobs:
             python: '3.14'
             node: 24
             test_group: commands
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / user invitation
+            python: '3.14'
+            node: 24
+            test_group: user-invitation
           - frappe: version-16
             app: erpnext
             app_branch: version-16
