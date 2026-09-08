@@ -3,7 +3,7 @@ import argparse
 import os
 
 import frappe
-from frappe.parallel_test_runner import ParallelTestRunner, get_all_tests
+from frappe.parallel_test_runner import ParallelTestRunner, get_all_tests, split_by_weight
 
 ISOLATED_GROUPS = {
     "webhook": ["integrations/doctype/webhook/test_webhook.py"],
@@ -13,8 +13,9 @@ ISOLATED_GROUPS = {
     ],
     "permissions": ["tests/test_permissions.py"],
     "db-query": ["tests/test_db_query.py"],
+    "commands": ["commands/test_commands.py"],
 }
-REMAINDER_GROUPS = {"remainder"}
+REMAINDER_GROUPS = {"remainder", "remainder-1", "remainder-2"}
 
 
 def relative_test_path(test_file):
@@ -42,7 +43,14 @@ class SelectedTestRunner(ParallelTestRunner):
                 raise RuntimeError(f"Missing expected Frappe test files: {', '.join(missing)}")
             return [by_path[path] for path in requested]
 
-        return [test for test in tests if relative_test_path(test) not in isolated_paths()]
+        remainder = [test for test in tests if relative_test_path(test) not in isolated_paths()]
+        if self.group == "remainder":
+            return remainder
+
+        weight_fn = getattr(self, "get_test_weight", None) or self.get_test_count
+        weights = [weight_fn(test) for test in remainder]
+        chunks = split_by_weight(remainder, weights, chunk_count=2)
+        return chunks[int(self.group.rsplit("-", 1)[1]) - 1]
 
 
 def main():

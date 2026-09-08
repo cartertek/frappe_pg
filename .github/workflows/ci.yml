@@ -209,10 +209,16 @@ jobs:
         include:
           - frappe: version-15
             app: frappe
-            label: Frappe v15 / remainder
+            label: Frappe v15 / remainder 1
             python: '3.10'
             node: 18
-            test_group: remainder
+            test_group: remainder-1
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / remainder 2
+            python: '3.10'
+            node: 18
+            test_group: remainder-2
           - frappe: version-15
             app: frappe
             label: Frappe v15 / webhook
@@ -237,6 +243,12 @@ jobs:
             python: '3.10'
             node: 18
             test_group: db-query
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / commands
+            python: '3.10'
+            node: 18
+            test_group: commands
           - frappe: version-15
             app: erpnext
             app_branch: version-15
@@ -279,6 +291,12 @@ jobs:
             python: '3.14'
             node: 24
             test_group: db-query
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / commands
+            python: '3.14'
+            node: 24
+            test_group: commands
           - frappe: version-16
             app: erpnext
             app_branch: version-16
@@ -380,14 +398,30 @@ jobs:
             bench setup requirements --node
             CI=Yes bench build --force --production
           fi
+
+          # Frappe's own command tests read these from common_site_config,
+          # not from the arguments used to create the primary test site.
+          bench set-config root_login postgres -g
+          bench set-config root_password root -g
+          bench set-config admin_password admin -g
+          bench set-config db_type postgres -g
+
+          # Create the site with stock Frappe first. Frappe's before_tests hook
+          # intentionally skips setup when another app is already installed.
           bench new-site test_site \
             --db-type postgres \
             --db-host 127.0.0.1 \
             --db-port 5432 \
+            --db-name test_frappe \
+            --db-password test_frappe \
             --db-root-username postgres \
             --db-root-password root \
-            --admin-password admin \
-            --install-app frappe_pg
+            --admin-password admin
+
+          if [[ "${{ matrix.app }}" == "frappe" ]]; then
+            bench --site test_site execute frappe.utils.install.before_tests
+          fi
+          bench --site test_site install-app frappe_pg
 
           if [[ "${{ matrix.app }}" == "erpnext" ]]; then
             bench --site test_site install-app erpnext
