@@ -700,6 +700,42 @@ def convert_mysql_inner_join_without_condition(query):
     return pattern.sub(replace, query)
 
 
+def normalize_hrms_shift_assignment_empty_end_date(query):
+    """Treat HRMS Shift Assignment empty end dates as NULL on PostgreSQL.
+
+    MariaDB tolerates comparing a Date column to the empty string. PostgreSQL
+    does not. Restrict the rewrite to HRMS's Shift Assignment ``end_date``
+    predicates, where the application already treats NULL and empty as the same
+    open-ended value.
+    """
+    if not re.search(r'\bFROM\s+"tabShift Assignment"\b', query, re.IGNORECASE):
+        return query
+    pattern = re.compile(
+        r'(?P<field>(?:"tabShift Assignment"\.)?"end_date")\s*=\s*\'\'',
+        re.IGNORECASE,
+    )
+    return pattern.sub(r'\g<field> IS NULL', query)
+
+
+def normalize_hrms_skill_assessment_group_order(query):
+    """Aggregate HRMS Skill Assessment idx when ordering a grouped rating query."""
+    required = (
+        r'\bFROM\s+"tabSkill Assessment"\b',
+        r'AVG\s*\(\s*"tabSkill Assessment"\."rating"\s*\)',
+        r'GROUP\s+BY\s+"tabSkill Assessment"\."skill"',
+        r'ORDER\s+BY\s+"tabSkill Assessment"\."idx"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    return re.sub(
+        r'ORDER\s+BY\s+("tabSkill Assessment"\."idx")',
+        r'ORDER BY MIN(\1)',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
 def convert_mysql_update_join(query):
     """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
 
@@ -784,6 +820,8 @@ def apply_all_query_transformations(query):
     query = convert_numeric_truthiness(query)
     query = convert_mysql_double_quoted_literals(query)
     query = convert_mysql_inner_join_without_condition(query)
+    query = normalize_hrms_shift_assignment_empty_end_date(query)
+    query = normalize_hrms_skill_assessment_group_order(query)
     query = convert_mysql_update_join(query)
 
     # Debug: Log if IF() is still present after transformation
