@@ -502,7 +502,15 @@ def convert_mysql_double_quoted_literals(query):
         return f'{match.group("field")}{match.group("space")}{values})'
 
     def replace_like_literal(match):
-        value = match.group("value").replace("'", "''")
+        value = match.group("value")
+        # MySQL code sometimes embeds a DB-API placeholder inside the quoted
+        # LIKE pattern, e.g. ``LIKE "%%%s%%"``. Simply changing the quote
+        # characters would leave the placeholder inside a SQL string and
+        # psycopg would produce invalid SQL (``'%'value'%'``). Preserve the
+        # wildcard semantics with PostgreSQL concatenation instead.
+        if value == "%%%s%%":
+            return f"{match.group('operator')}{match.group('space')}'%%' || %s || '%%'"
+        value = value.replace("'", "''")
         return f"{match.group('operator')}{match.group('space')}'{value}'"
 
     query = whitespace_literal.sub(replace_whitespace, query)
