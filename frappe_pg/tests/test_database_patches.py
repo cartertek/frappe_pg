@@ -18,18 +18,25 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_datediff,
     convert_mysql_double_quoted_literals,
     convert_mysql_inner_join_without_condition,
+    convert_mysql_regexp_operator,
+    convert_mysql_timestamp_pair,
     convert_mysql_update_join,
     convert_mysql_zero_date_sentinel,
     convert_numeric_truthiness,
     expand_mysql_having_alias,
     normalize_erpnext_advance_payment_currency_aggregate,
     normalize_erpnext_bank_clearance_journal_query,
+    normalize_erpnext_batch_availability_grouping,
     normalize_erpnext_bom_items_grouping,
+    normalize_erpnext_budget_requested_amount,
     normalize_erpnext_item_end_of_life_zero_date,
     normalize_erpnext_landed_cost_center_aggregate,
+    normalize_erpnext_mode_of_payment_grouping,
     normalize_erpnext_negative_invoice_voucher_literal,
     normalize_erpnext_production_plan_subitems_grouping,
+    normalize_erpnext_repost_item_grouping,
     normalize_erpnext_stock_voucher_group_order,
+    normalize_erpnext_unreconcile_payment_grouping,
     normalize_erpnext_v15_bom_group_query,
     normalize_hrms_income_tax_salary_slip_grouping,
     normalize_hrms_legacy_string_literals,
@@ -691,6 +698,136 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
     def test_double_quoted_identifier_rhs_is_not_rewritten(self):
         query = 'SELECT * FROM "tabEmployee Advance" WHERE "paid_amount" = "return_amount"'
         self.assertEqual(convert_mysql_double_quoted_literals(query), query)
+
+    def test_mysql_regexp_operator(self):
+        query = 'SELECT * FROM "tabStock Ledger Entry" WHERE CONCAT_WS(, "serial_no") REGEXP %(pattern)s'
+        expected = 'SELECT * FROM "tabStock Ledger Entry" WHERE CONCAT_WS(, "serial_no") ~ %(pattern)s'
+        self.assertEqual(convert_mysql_regexp_operator(query), expected)
+        self.assertEqual(
+            convert_mysql_regexp_operator('SELECT x FROM t WHERE x NOT REGEXP %s'),
+            'SELECT x FROM t WHERE x !~ %s',
+        )
+
+    def test_mysql_timestamp_date_time_pair(self):
+        query = 'SELECT TIMESTAMP("posting_date","posting_time") "posting_datetime" FROM "tabStock Entry"'
+        expected = 'SELECT ("posting_date" + "posting_time") "posting_datetime" FROM "tabStock Entry"'
+        self.assertEqual(convert_mysql_timestamp_pair(query), expected)
+        self.assertEqual(
+            convert_mysql_timestamp_pair('SELECT TIMESTAMP("posting_date") FROM t'),
+            'SELECT TIMESTAMP("posting_date") FROM t',
+        )
+
+    def test_erpnext_repost_item_grouping_matches_develop(self):
+        query = (
+            'SELECT "item_code","warehouse","posting_date","posting_time","creation","posting_datetime" '
+            'FROM "tabStock Ledger Entry" WHERE "voucher_no"=%s '
+            'GROUP BY "item_code","warehouse" ORDER BY "creation" ASC'
+        )
+        transformed = normalize_erpnext_repost_item_grouping(query)
+        for field in ("posting_date", "posting_time", "creation", "posting_datetime"):
+            self.assertIn(f'MIN("{field}") AS "{field}"', transformed)
+        self.assertIn('ORDER BY MIN("creation") ASC', transformed)
+
+    def test_mode_of_payment_grouping_matches_develop(self):
+        query = (
+            'SELECT mpa.default_account, mpa.parent as mop, mp.type as type '
+            'FROM "tabMode of Payment Account" mpa,"tabMode of Payment" mp '
+            'WHERE mpa.parent=mp.name AND mpa.company=%s GROUP BY mp.name'
+        )
+        transformed = normalize_erpnext_mode_of_payment_grouping(query)
+        self.assertIn('GROUP BY mpa.default_account, mpa.parent, mp.type', transformed)
+
+    def test_bom_grouping_handles_v16_key_order(self):
+        query = (
+            'select bom_item.item_code, bom_item.idx, item.item_name, '
+            'sum(bom_item.stock_qty/coalesce(bom.quantity, 1)) * %(qty)s as qty, '
+            'item.stock_uom, bom_item.operation_row_id, bom_item.is_phantom_item, bom_item.bom_no '
+            'from "tabBOM Item" bom_item '
+            'JOIN "tabBOM" bom ON bom_item.parent = bom.name '
+            'JOIN "tabItem" item ON item.name = bom_item.item_code '
+            'where bom_item.docstatus < 2 '
+            'group by item_code, operation_row_id, stock_uom order by idx'
+        )
+        transformed = normalize_erpnext_bom_items_grouping(query)
+        self.assertIn(
+            'GROUP BY bom_item.item_code, bom_item.operation_row_id, item.stock_uom, '
+            'bom_item.bom_no, bom_item.is_phantom_item',
+            transformed,
+        )
+        self.assertIn('ORDER BY MIN(bom_item.idx)', transformed)
+        self.assertIn(
+            'JOIN "tabItem" item ON item.name = bom_item.item_code GROUP BY',
+            transformed,
+        )
+        self.assertNotIn('ONGROUP', transformed)
+
+    def test_double_quoted_literal_after_legacy_qualified_field(self):
+        query = 'WHERE entry.purpose = "Manufacture" AND "entry"."status" = "other"."status"'
+        transformed = convert_mysql_double_quoted_literals(query)
+        self.assertIn("entry.purpose = 'Manufacture'", transformed)
+        self.assertIn('"entry"."status" = "other"."status"', transformed)
+
+    def test_same_name_double_quoted_rhs_stays_identifier(self):
+        query = 'UPDATE "tabPayment Schedule" SET paid_amount = "paid_amount" + %s'
+        self.assertEqual(convert_mysql_double_quoted_literals(query), query)
+
+    def test_budget_requested_amount_moves_rate_inside_sum(self):
+        query = (
+            'SELECT SUM(COALESCE("tabMaterial Request Item"."stock_qty",0)-'
+            'COALESCE("tabMaterial Request Item"."ordered_qty",0))*'
+            '"tabMaterial Request Item"."rate" "amount" '
+            'FROM "tabMaterial Request" INNER JOIN "tabMaterial Request Item" '
+            'ON "tabMaterial Request"."name"="tabMaterial Request Item"."parent"'
+        )
+        transformed = normalize_erpnext_budget_requested_amount(query)
+        self.assertIn(
+            'SUM((COALESCE("tabMaterial Request Item"."stock_qty",0)-'
+            'COALESCE("tabMaterial Request Item"."ordered_qty",0)) * '
+            'COALESCE("tabMaterial Request Item"."rate",0))',
+            transformed,
+        )
+
+    def test_batch_availability_aggregates_expiry_and_order(self):
+        query = (
+            'SELECT "tabSerial and Batch Entry"."batch_no",'
+            '"tabSerial and Batch Entry"."warehouse",'
+            'SUM("tabSerial and Batch Entry"."qty") "qty",'
+            '"tabBatch"."expiry_date" '
+            'FROM "tabStock Ledger Entry" '
+            'INNER JOIN "tabSerial and Batch Entry" ON 1=1 '
+            'INNER JOIN "tabBatch" ON 1=1 '
+            'GROUP BY "tabSerial and Batch Entry"."batch_no",'
+            '"tabSerial and Batch Entry"."warehouse" '
+            'ORDER BY "tabBatch"."expiry_date"'
+        )
+        transformed = normalize_erpnext_batch_availability_grouping(query)
+        self.assertIn('MAX("tabBatch"."expiry_date") AS "expiry_date"', transformed)
+        self.assertIn('ORDER BY MAX("tabBatch"."expiry_date")', transformed)
+
+    def test_unreconcile_payment_aggregates_dependent_fields(self):
+        query = (
+            'SELECT "tabPayment Ledger Entry"."company",'
+            '"tabPayment Ledger Entry"."account",'
+            '"tabPayment Ledger Entry"."party_type",'
+            '"tabPayment Ledger Entry"."party",'
+            '"tabPayment Ledger Entry"."against_voucher_type" "reference_doctype",'
+            '"tabPayment Ledger Entry"."against_voucher_no" "reference_name",'
+            'ABS(SUM("tabPayment Ledger Entry"."amount_in_account_currency")) "allocated_amount",'
+            '"tabPayment Ledger Entry"."account_currency" '
+            'FROM "tabPayment Ledger Entry" '
+            'GROUP BY "tabPayment Ledger Entry"."against_voucher_no"'
+        )
+        transformed = normalize_erpnext_unreconcile_payment_grouping(query)
+        for field in (
+            "company",
+            "account",
+            "party_type",
+            "party",
+            "against_voucher_type",
+            "account_currency",
+        ):
+            self.assertIn(f'MAX("tabPayment Ledger Entry"."{field}")', transformed)
+        self.assertIn('"tabPayment Ledger Entry"."against_voucher_no" "reference_name"', transformed)
 
     def test_simple_mysql_update_join(self):
         query = (
