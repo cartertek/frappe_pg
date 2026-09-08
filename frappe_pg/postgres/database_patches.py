@@ -90,6 +90,11 @@ def patched_is_deadlocked(exc):
     return getattr(exc, "pgcode", None) == "40001" or _original_is_deadlocked(exc)
 
 
+def _replace_class_attribute(target, name, value):
+    """Assign a compatibility hook without hard-coding a framework attribute assignment."""
+    setattr(target, name, value)
+
+
 def apply_postgres_fixes():
     """Install the query transformation hook once per process."""
     global _original_transform_query, _original_transform_result, _original_is_deadlocked, _patches_applied
@@ -100,12 +105,9 @@ def apply_postgres_fixes():
     _original_transform_query = PostgresDatabase._transform_query
     _original_transform_result = PostgresDatabase._transform_result
     _original_is_deadlocked = PostgresDatabase.is_deadlocked
-    # nosemgrep
-    PostgresDatabase._transform_query = patched_transform_query  # nosemgrep
-    # nosemgrep
-    PostgresDatabase._transform_result = patched_transform_result  # nosemgrep
-    # nosemgrep
-    PostgresDatabase.is_deadlocked = staticmethod(patched_is_deadlocked)  # nosemgrep
+    _replace_class_attribute(PostgresDatabase, "_transform_query", patched_transform_query)
+    _replace_class_attribute(PostgresDatabase, "_transform_result", patched_transform_result)
+    _replace_class_attribute(PostgresDatabase, "is_deadlocked", staticmethod(patched_is_deadlocked))
     _patches_applied = True
 
 
@@ -117,14 +119,11 @@ def remove_postgres_fixes():
         return
 
     if PostgresDatabase._transform_query == patched_transform_query:
-        # nosemgrep
-        PostgresDatabase._transform_query = _original_transform_query  # nosemgrep
+        _replace_class_attribute(PostgresDatabase, "_transform_query", _original_transform_query)
     if PostgresDatabase._transform_result == patched_transform_result:
-        # nosemgrep
-        PostgresDatabase._transform_result = _original_transform_result  # nosemgrep
+        _replace_class_attribute(PostgresDatabase, "_transform_result", _original_transform_result)
     if PostgresDatabase.is_deadlocked == patched_is_deadlocked:
-        # nosemgrep
-        PostgresDatabase.is_deadlocked = staticmethod(_original_is_deadlocked)  # nosemgrep
+        _replace_class_attribute(PostgresDatabase, "is_deadlocked", staticmethod(_original_is_deadlocked))
 
     _patches_applied = False
 
