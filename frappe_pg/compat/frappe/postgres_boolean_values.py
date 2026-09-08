@@ -77,11 +77,12 @@ def apply():
     changed = False
     if not _value_wrapper_handles_bool(terms.ParameterizedValueWrapper.get_sql):
         _original_value_get_sql = terms.ParameterizedValueWrapper.get_sql
+        original_value_get_sql = _original_value_get_sql
 
         def compatible_value_get_sql(self, *args, **kwargs):
             if isinstance(self.value, bool):
                 self.value = str(int(self.value))
-            return _original_value_get_sql(self, *args, **kwargs)
+            return original_value_get_sql(self, *args, **kwargs)
 
         _patched_value_get_sql = compatible_value_get_sql
         terms.ParameterizedValueWrapper.get_sql = compatible_value_get_sql  # nosemgrep
@@ -89,6 +90,7 @@ def apply():
 
     if not _modify_values_handles_bool(postgres.modify_values):
         _original_modify_values = postgres.modify_values
+        original_modify_values = _original_modify_values
 
         def compatible_modify_values(values):
             def normalize(value):
@@ -107,7 +109,7 @@ def apply():
                 values = [normalize(value) for value in values]
             elif isinstance(values, bool):
                 values = str(int(values))
-            return _original_modify_values(values)
+            return original_modify_values(values)
 
         _patched_modify_values = compatible_modify_values
         postgres.modify_values = compatible_modify_values  # nosemgrep
