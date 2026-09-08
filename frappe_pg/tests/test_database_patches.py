@@ -24,6 +24,7 @@ from frappe_pg.postgres.query_transformers import (
     expand_mysql_having_alias,
     normalize_erpnext_advance_payment_currency_aggregate,
     normalize_erpnext_bank_clearance_journal_query,
+    normalize_erpnext_bom_items_grouping,
     normalize_erpnext_item_end_of_life_zero_date,
     normalize_erpnext_landed_cost_center_aggregate,
     normalize_erpnext_negative_invoice_voucher_literal,
@@ -220,6 +221,55 @@ class TestQueryTransformers(unittest.TestCase):
     def test_unrelated_grouped_query_is_not_touched_by_bom_normalizer(self):
         query = 'SELECT item_code, idx FROM "tabOther" GROUP BY item_code ORDER BY idx'
         self.assertEqual(normalize_erpnext_v15_bom_group_query(query), query)
+
+    def test_erpnext_normal_bom_items_grouping_is_qualified_and_aggregated(self):
+        query = """SELECT
+            bom_item.item_code, bom_item.idx, item.item_name,
+            SUM(bom_item.stock_qty/COALESCE(bom.quantity, 1)) * %(qty)s AS qty,
+            item.image, bom.project, item.stock_uom, item.item_group,
+            item.allow_alternative_item, item_default.default_warehouse,
+            item_default.expense_account AS expense_account,
+            item_default.buying_cost_center AS cost_center,
+            bom_item.rate, bom_item.uom, bom_item.conversion_factor,
+            bom_item.source_warehouse, bom_item.operation,
+            bom_item.include_item_in_manufacturing, bom_item.sourced_by_supplier,
+            SUM(bom_item.stock_qty/COALESCE(bom.quantity, 1)) * bom_item.rate * %(qty)s AS amount,
+            bom_item.description, bom_item.base_rate AS rate,
+            bom_item.operation_row_id, bom_item.is_phantom_item, bom_item.bom_no
+            FROM "tabBOM Item" bom_item
+            JOIN "tabBOM" bom ON bom_item.parent = bom.name
+            JOIN "tabItem" item ON item.name = bom_item.item_code
+            LEFT JOIN "tabItem Default" item_default ON item_default.parent = item.name
+            WHERE bom_item.docstatus < 2
+            GROUP BY item_code, stock_uom, operation
+            ORDER BY idx"""
+        transformed = normalize_erpnext_bom_items_grouping(query)
+        self.assertIn(
+            "GROUP BY bom_item.item_code, item.stock_uom, bom_item.operation, "
+            "bom_item.operation_row_id, bom_item.bom_no, bom_item.is_phantom_item",
+            transformed,
+        )
+        self.assertIn("MAX(item.item_name) AS item_name", transformed)
+        self.assertIn("MAX(bom_item.description) AS description", transformed)
+        self.assertIn("MAX(bom_item.rate)", transformed)
+        self.assertIn("ORDER BY MIN(bom_item.idx)", transformed)
+
+    def test_erpnext_scrap_bom_grouping_qualifies_item_code(self):
+        query = """SELECT bom_item.item_code, item.item_name,
+            SUM(bom_item.stock_qty/COALESCE(bom.quantity, 1)) * %(qty)s AS qty,
+            item.stock_uom, item.description
+            FROM "tabBOM Scrap Item" bom_item
+            JOIN "tabBOM" bom ON bom_item.parent = bom.name
+            JOIN "tabItem" item ON item.name = bom_item.item_code
+            GROUP BY item_code, stock_uom ORDER BY idx"""
+        transformed = normalize_erpnext_bom_items_grouping(query)
+        self.assertIn("GROUP BY bom_item.item_code, item.stock_uom", transformed)
+        self.assertIn("MAX(item.item_name) AS item_name", transformed)
+        self.assertIn("MAX(item.description) AS description", transformed)
+
+    def test_unrelated_item_code_grouping_is_unchanged(self):
+        query = 'SELECT item_code, SUM(qty) FROM "tabSales Order Item" GROUP BY item_code'
+        self.assertEqual(normalize_erpnext_bom_items_grouping(query), query)
 
     def test_grouped_order_aggregate_restores_preserved_table_qualifier(self):
         query = (
