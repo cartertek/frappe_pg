@@ -59,7 +59,9 @@ def _compatible_query_for_outstanding(self):
     module = _load_accounts_utils()
     qb = module.qb
     Criterion, Table, AliasedQuery = module.Criterion, module.Table, module.AliasedQuery
-    Case, Max, Min, Sum = module.Case, module.Max, module.Min, module.Sum
+    from frappe.query_builder.functions import Min
+
+    Case, Max, Sum = module.Case, module.Max, module.Sum
     ple = self.ple
     filter_on_voucher_no = []
     filter_on_against_voucher_no = []
