@@ -23,6 +23,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_item_end_of_life_zero_date,
     normalize_erpnext_landed_cost_center_aggregate,
     normalize_erpnext_negative_invoice_voucher_literal,
+    normalize_erpnext_production_plan_subitems_grouping,
     normalize_erpnext_v15_bom_group_query,
     normalize_payment_request_single_match_grouping,
     remove_erpnext_inventory_dimension_default_order,
@@ -315,6 +316,34 @@ class TestQueryTransformers(unittest.TestCase):
             'AND "tabLeave Allocation"."to_date" OR ("tabLeave Ledger Entry"."is_lwp" <> 0)'
         )
         self.assertEqual(convert_numeric_truthiness(query), expected)
+
+    def test_erpnext_production_plan_subitems_grouping_matches_upstream_fix(self):
+        query = """SELECT "tabBOM Item"."item_code","tabItem"."default_material_request_type",
+            "tabItem"."item_name",SUM("tabBOM Item"."stock_qty") "qty",
+            "tabItem"."is_sub_contracted_item" "is_sub_contracted",
+            "tabBOM Item"."source_warehouse","tabItem"."default_bom" "default_bom",
+            "tabBOM Item"."description" "description","tabBOM Item"."stock_uom" "stock_uom",
+            "tabItem"."min_order_qty" "min_order_qty","tabItem"."safety_stock" "safety_stock",
+            "tabItem Default"."default_warehouse","tabItem"."purchase_uom",
+            "tabUOM Conversion Detail"."conversion_factor","tabBOM"."item" "main_bom_item",
+            "tabBOM"."name" "main_bom","tabBOM Item"."is_phantom_item"
+            FROM "tabBOM Item" JOIN "tabBOM" ON "tabBOM"."name"="tabBOM Item"."parent"
+            JOIN "tabItem" ON "tabBOM Item"."item_code"="tabItem"."name"
+            GROUP BY "tabBOM Item"."item_code" ORDER BY "tabBOM Item"."idx"""
+        transformed = normalize_erpnext_production_plan_subitems_grouping(query)
+        self.assertIn(
+            'MAX("tabItem"."default_material_request_type") AS "default_material_request_type"', transformed
+        )
+        self.assertIn('MAX("tabItem"."is_sub_contracted_item") "is_sub_contracted"', transformed)
+        self.assertIn('MIN("tabBOM Item"."is_phantom_item") AS "is_phantom_item"', transformed)
+        self.assertIn('ORDER BY MIN("tabBOM Item"."idx")', transformed)
+        self.assertIn('"tabBOM Item"."item_code"', transformed)
+
+    def test_other_bom_item_group_query_is_unchanged(self):
+        query = (
+            'SELECT "tabBOM Item"."item_code",COUNT(*) FROM "tabBOM Item" GROUP BY "tabBOM Item"."item_code"'
+        )
+        self.assertEqual(normalize_erpnext_production_plan_subitems_grouping(query), query)
 
     def test_erpnext_landed_cost_center_is_aggregated(self):
         query = """select sum(applicable_charges), cost_center
