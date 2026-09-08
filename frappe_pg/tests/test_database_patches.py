@@ -18,6 +18,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_datediff,
     convert_mysql_double_quoted_literals,
     convert_mysql_inner_join_without_condition,
+    convert_mysql_limit_offset,
     convert_mysql_regexp_operator,
     convert_mysql_timestamp_pair,
     convert_mysql_update_join,
@@ -35,6 +36,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_negative_invoice_voucher_literal,
     normalize_erpnext_production_plan_subitems_grouping,
     normalize_erpnext_repost_item_grouping,
+    normalize_erpnext_reserved_warehouse_distinct,
     normalize_erpnext_stock_voucher_group_order,
     normalize_erpnext_unreconcile_payment_grouping,
     normalize_erpnext_v15_bom_group_query,
@@ -47,6 +49,7 @@ from frappe_pg.postgres.query_transformers import (
     qualify_frappe_grouped_order_aggregate,
     remove_erpnext_inventory_dimension_default_order,
     remove_index_hints,
+    remove_mysql_order_by_null,
     remove_order_by_from_aggregate_only_query,
 )
 
@@ -469,6 +472,8 @@ class TestQueryTransformers(unittest.TestCase):
         self.assertNotIn("'0000-00-00'", transformed)
         self.assertIn('ORDER BY MAX("tabJournal Entry"."posting_date")', transformed)
 
+        self.assertEqual(normalize_erpnext_bank_clearance_journal_query(transformed), transformed)
+
     def test_unrelated_journal_group_query_is_unchanged(self):
         query = 'SELECT COUNT(*) FROM "tabJournal Entry" GROUP BY "company"'
         self.assertEqual(normalize_erpnext_bank_clearance_journal_query(query), query)
@@ -713,6 +718,10 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         expected = 'SELECT ("posting_date" + "posting_time") "posting_datetime" FROM "tabStock Entry"'
         self.assertEqual(convert_mysql_timestamp_pair(query), expected)
         self.assertEqual(
+            convert_mysql_timestamp_pair("SELECT timestamp(sle.posting_date, sle.posting_time) FROM t sle"),
+            "SELECT (sle.posting_date + sle.posting_time) FROM t sle",
+        )
+        self.assertEqual(
             convert_mysql_timestamp_pair('SELECT TIMESTAMP("posting_date") FROM t'),
             'SELECT TIMESTAMP("posting_date") FROM t',
         )
@@ -755,10 +764,8 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
             transformed,
         )
         self.assertIn('ORDER BY MIN(bom_item.idx)', transformed)
-        self.assertIn(
-            'JOIN "tabItem" item ON item.name = bom_item.item_code GROUP BY',
-            transformed,
-        )
+        self.assertIn('JOIN "tabItem" item ON item.name = bom_item.item_code', transformed)
+        self.assertIn('where bom_item.docstatus < 2 GROUP BY', transformed)
         self.assertNotIn('ONGROUP', transformed)
 
     def test_double_quoted_literal_after_legacy_qualified_field(self):
@@ -828,6 +835,35 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         ):
             self.assertIn(f'MAX("tabPayment Ledger Entry"."{field}")', transformed)
         self.assertIn('"tabPayment Ledger Entry"."against_voucher_no" "reference_name"', transformed)
+
+    def test_reserved_warehouse_distinct_uses_grouped_earliest_creation(self):
+        query = (
+            'SELECT DISTINCT "tabStock Reservation Entry"."warehouse" '
+            'FROM "tabStock Reservation Entry" '
+            'WHERE "tabStock Reservation Entry"."docstatus"=1 '
+            'ORDER BY "tabStock Reservation Entry"."creation"'
+        )
+        transformed = normalize_erpnext_reserved_warehouse_distinct(query)
+        self.assertNotIn('SELECT DISTINCT', transformed)
+        self.assertIn('GROUP BY "tabStock Reservation Entry"."warehouse"', transformed)
+        self.assertIn('ORDER BY MIN("tabStock Reservation Entry"."creation")', transformed)
+
+    def test_mysql_order_by_null_is_removed(self):
+        query = 'SELECT parent FROM "tabItem Variant Attribute" GROUP BY parent ORDER BY NULL'
+        self.assertEqual(
+            remove_mysql_order_by_null(query),
+            'SELECT parent FROM "tabItem Variant Attribute" GROUP BY parent',
+        )
+
+    def test_mysql_limit_offset_is_reordered(self):
+        self.assertEqual(
+            convert_mysql_limit_offset('SELECT name FROM "tabItem" LIMIT %(start)s, %(page_len)s'),
+            'SELECT name FROM "tabItem" LIMIT %(page_len)s OFFSET %(start)s',
+        )
+        self.assertEqual(
+            convert_mysql_limit_offset('SELECT name FROM t LIMIT 10, 20'),
+            'SELECT name FROM t LIMIT 20 OFFSET 10',
+        )
 
     def test_simple_mysql_update_join(self):
         query = (

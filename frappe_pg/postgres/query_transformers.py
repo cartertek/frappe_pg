@@ -1127,35 +1127,39 @@ def normalize_erpnext_bank_clearance_journal_query(query):
     if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
         return query
 
-    fields = (
+    fields = {
         ("tabJournal Entry", "cheque_no"),
         ("tabJournal Entry", "cheque_date"),
         ("tabJournal Entry", "posting_date"),
         ("tabJournal Entry Account", "against_account"),
         ("tabJournal Entry", "clearance_date"),
         ("tabJournal Entry Account", "account_currency"),
+    }
+    select_match = re.search(r"\bSELECT\b(?P<select>.+?)\bFROM\b", query, re.IGNORECASE | re.DOTALL)
+    if not select_match:
+        return query
+
+    transformed_items = []
+    simple_projection = re.compile(
+        r'^(?P<expr>"(?P<table>[^"]+)"\."(?P<field>[^"]+)")'
+        r'(?P<alias>\s+(?:AS\s+)?"?[A-Za-z_][A-Za-z0-9_]*"?)?$',
+        re.IGNORECASE,
     )
-    for table, field in fields:
-        pattern = re.compile(
-            rf'(?<![A-Za-z0-9_])(?P<expr>"{re.escape(table)}"\."{re.escape(field)}")'
-            rf'(?P<alias>\s+(?:AS\s+)?"[A-Za-z_][A-Za-z0-9_]*")?',
-            re.IGNORECASE,
-        )
+    for item in split_by_comma(select_match.group("select")):
+        stripped = item.strip()
+        match = simple_projection.match(stripped)
+        if match and (match.group("table"), match.group("field")) in fields:
+            transformed_items.append(f'MAX({match.group("expr")}){match.group("alias") or ""}')
+        else:
+            # Existing aggregate projections are already PostgreSQL-safe and
+            # must remain idempotent when this transformer runs repeatedly.
+            transformed_items.append(stripped)
 
-        def replace(match):
-            # Do not wrap occurrences already used inside an aggregate or predicate.
-            prefix = query[max(0, match.start() - 8) : match.start()].upper()
-            if re.search(r'(?:MAX|MIN|SUM|AVG|COUNT)\s*\($', prefix):
-                return match.group(0)
-            return f'MAX({match.group("expr")}){match.group("alias") or ""}'
-
-        # Only transform the SELECT-list occurrence before the top-level FROM.
-        select_match = re.search(r'\bSELECT\b(?P<select>.+?)\bFROM\b', query, re.IGNORECASE | re.DOTALL)
-        if not select_match:
-            return query
-        select_text = select_match.group("select")
-        transformed = pattern.sub(replace, select_text, count=1)
-        query = query[: select_match.start("select")] + transformed + query[select_match.end("select") :]
+    query = (
+        query[: select_match.start("select")]
+        + ",".join(transformed_items)
+        + query[select_match.end("select") :]
+    )
 
     query = re.sub(
         r'(?P<field>"tabJournal Entry"\."clearance_date")\s*=\s*\'0000-00-00\'',
@@ -1304,7 +1308,7 @@ def convert_mysql_timestamp_pair(query):
     this transform to simple identifiers so one-argument casts/functions are
     never confused with this MySQL extension.
     """
-    atom = r'(?:"[^"]+"\.)?"?[A-Za-z_][A-Za-z0-9_$]*"?'
+    atom = r'(?:(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)\.)?"?[A-Za-z_][A-Za-z0-9_$]*"?'
     pattern = re.compile(
         rf"\bTIMESTAMP\s*\(\s*(?P<date>{atom})\s*,\s*(?P<time>{atom})\s*\)",
         re.IGNORECASE,
@@ -1463,6 +1467,70 @@ def normalize_erpnext_unreconcile_payment_grouping(query):
     return query
 
 
+def normalize_erpnext_reserved_warehouse_distinct(query):
+    """Backport ERPNext's PostgreSQL-safe reserved-warehouse ordering.
+
+    Older ERPNext selects DISTINCT warehouse and orders by the unselected
+    creation timestamp. Develop uses GROUP BY warehouse + MIN(creation), which
+    preserves distinct warehouses ordered by their earliest reservation.
+    """
+    required = (
+        r'\bSELECT\s+DISTINCT\s+"tabStock Reservation Entry"\."warehouse"',
+        r'\bFROM\s+"tabStock Reservation Entry"',
+        r'\bORDER\s+BY\s+"tabStock Reservation Entry"\."creation"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    query = re.sub(
+        r'\bSELECT\s+DISTINCT\s+("tabStock Reservation Entry"\."warehouse")',
+        r'SELECT \1',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    order_match = re.search(
+        r'\bORDER\s+BY\s+"tabStock Reservation Entry"\."creation"(?P<direction>\s+(?:ASC|DESC))?',
+        query,
+        re.IGNORECASE,
+    )
+    if not order_match:
+        return query
+    group = ' GROUP BY "tabStock Reservation Entry"."warehouse" '
+    query = query[: order_match.start()] + group + query[order_match.start() :]
+    return re.sub(
+        r'\bORDER\s+BY\s+"tabStock Reservation Entry"\."creation"(?P<direction>\s+(?:ASC|DESC))?',
+        lambda match: (
+            'ORDER BY MIN("tabStock Reservation Entry"."creation")' + (match.group("direction") or "")
+        ),
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def remove_mysql_order_by_null(query):
+    """Drop MySQL's ``ORDER BY NULL`` no-ordering idiom."""
+    return re.sub(
+        r"\s+ORDER\s+BY\s+NULL(?=\s*(?:LIMIT\b|OFFSET\b|FOR\b|$))",
+        "",
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
+def convert_mysql_limit_offset(query):
+    """Translate MySQL ``LIMIT offset, count`` to PostgreSQL LIMIT/OFFSET."""
+    value = r"(?:%\([A-Za-z_][A-Za-z0-9_]*\)s|%s|\d+)"
+    pattern = re.compile(
+        rf"\bLIMIT\s+(?P<offset>{value})\s*,\s*(?P<count>{value})",
+        re.IGNORECASE,
+    )
+    return pattern.sub(
+        lambda match: f'LIMIT {match.group("count")} OFFSET {match.group("offset")}',
+        query,
+    )
+
+
 def convert_mysql_update_join(query):
     """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
 
@@ -1543,6 +1611,8 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_item_end_of_life_zero_date(query)
     query = expand_mysql_having_alias(query)
     query = remove_order_by_from_aggregate_only_query(query)
+    query = remove_mysql_order_by_null(query)
+    query = convert_mysql_limit_offset(query)
     query = normalize_erpnext_v15_bom_group_query(query)
     query = normalize_erpnext_bom_items_grouping(query)
     query = qualify_frappe_grouped_order_aggregate(query)
@@ -1571,6 +1641,7 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_budget_requested_amount(query)
     query = normalize_erpnext_batch_availability_grouping(query)
     query = normalize_erpnext_unreconcile_payment_grouping(query)
+    query = normalize_erpnext_reserved_warehouse_distinct(query)
     query = convert_mysql_update_join(query)
 
     # Debug: Log if IF() is still present after transformation
