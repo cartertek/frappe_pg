@@ -778,7 +778,7 @@ def normalize_hrms_shift_assignment_empty_end_date(query):
     predicates, where the application already treats NULL and empty as the same
     open-ended value.
     """
-    if not re.search(r'\bFROM\s+"tabShift Assignment"\b', query, re.IGNORECASE):
+    if not re.search(r'\bFROM\s+"tabShift Assignment"', query, re.IGNORECASE):
         return query
     pattern = re.compile(
         r'(?P<field>(?:"tabShift Assignment"\.)?"end_date")\s*=\s*\'\'',
@@ -790,7 +790,7 @@ def normalize_hrms_shift_assignment_empty_end_date(query):
 def normalize_hrms_skill_assessment_group_order(query):
     """Aggregate HRMS Skill Assessment idx when ordering a grouped rating query."""
     required = (
-        r'\bFROM\s+"tabSkill Assessment"\b',
+        r'\bFROM\s+"tabSkill Assessment"',
         r'AVG\s*\(\s*"tabSkill Assessment"\."rating"\s*\)',
         r'GROUP\s+BY\s+"tabSkill Assessment"\."skill"',
         r'ORDER\s+BY\s+"tabSkill Assessment"\."idx"',
