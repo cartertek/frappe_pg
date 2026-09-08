@@ -696,7 +696,7 @@ def normalize_payment_request_single_match_grouping(query):
     equivalent for the only rows that survive the outer ``count = 1`` filter.
     """
     required = (
-        r'\bFROM\s+"tabPayment Request"\b',
+        r'\bFROM\s+"tabPayment Request"',
         r'COUNT\s*\(\s*\*\s*\)\s+(?:AS\s+)?"count"',
         r'GROUP\s+BY\s+"reference_doctype"\s*,\s*"reference_name"\s*,\s*"outstanding_amount"',
         r'WHERE\s+"sq0"\."count"\s*=\s*[\'"]?1[\'"]?',
