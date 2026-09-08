@@ -36,29 +36,11 @@ def apply_postgres_fixes():
     if _patches_applied:
         return
 
-    print("=" * 60)
-    print("Applying PostgreSQL Compatibility Patches for ERPNext")
-    print("=" * 60)
-
     _original_transform_query = PostgresDatabase._transform_query
     _original_is_deadlocked = PostgresDatabase.is_deadlocked
     PostgresDatabase._transform_query = patched_transform_query  # nosemgrep
     PostgresDatabase.is_deadlocked = staticmethod(patched_is_deadlocked)  # nosemgrep
     _patches_applied = True
-
-    print("✓ Query transformation hook applied")
-    print("✓ PostgreSQL serialization failures classified as retriable conflicts")
-    print("✓ Frappe SQL and transaction methods left unchanged")
-    print()
-    print("The following transformations are now active:")
-    print("  • FORCE/USE/IGNORE INDEX removal")
-    print("  • IF() → CASE WHEN conversion")
-    print("  • IFNULL() → COALESCE() conversion")
-    print("  • DATE_FORMAT() → TO_CHAR() conversion")
-    print("  • Numeric truthiness → explicit boolean comparison")
-    print("  • Unambiguous double-quoted MySQL string literals → SQL strings")
-    print("  • Simple UPDATE ... JOIN → PostgreSQL UPDATE ... FROM")
-    print("=" * 60)
 
 
 def remove_postgres_fixes():
@@ -103,5 +85,6 @@ def check_patches_status():
 
 try:
     apply_postgres_fixes()
-except Exception as exc:
-    print(f"Warning: Could not apply PostgreSQL patches during module import: {exc}")
+except Exception:
+    # Import-time initialization can occur before Frappe is ready.
+    pass

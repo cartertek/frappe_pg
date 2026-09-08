@@ -150,6 +150,15 @@ class TestQueryTransformers(unittest.TestCase):
         expected = 'SELECT * FROM "tabSingles" WHERE doctype = \'HR Settings\' AND field = \'x\''
         self.assertEqual(convert_mysql_double_quoted_literals(query), expected)
 
+    def test_double_quoted_mysql_identifier_shaped_literal_after_bare_field(self):
+        query = 'DELETE FROM "tabUser Invitation" WHERE name = "cjlelss3v1"'
+        expected = "DELETE FROM \"tabUser Invitation\" WHERE name = 'cjlelss3v1'"
+        self.assertEqual(convert_mysql_double_quoted_literals(query), expected)
+
+    def test_double_quoted_mysql_identifier_shaped_literal_after_quoted_field_is_unchanged(self):
+        query = 'SELECT * FROM "tabExample" WHERE "name" = "other_column"'
+        self.assertEqual(convert_mysql_double_quoted_literals(query), query)
+
     def test_double_quoted_qualified_identifier_with_spaces_is_unchanged(self):
         query = (
             'SELECT "tabWeb Page"."route" FROM "tabWeb Page" '
@@ -288,6 +297,16 @@ class TestTransformQueryHook(unittest.TestCase):
                 legacy_order = modify_query(apply_all_query_transformations(query))
                 transform_hook_order = apply_all_query_transformations(modify_query(query))
                 self.assertEqual(transform_hook_order, legacy_order)
+
+    def test_patch_application_does_not_write_to_stdout(self):
+        import contextlib
+        import io
+
+        database_patches.remove_postgres_fixes()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            database_patches.apply_postgres_fixes()
+        self.assertEqual(output.getvalue(), "")
 
     def test_patch_application_is_idempotent(self):
         transform = PostgresDatabase._transform_query
