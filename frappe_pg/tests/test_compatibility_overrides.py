@@ -264,3 +264,61 @@ class TestUniqueInsertTransactionCompatibility(unittest.TestCase):
                     self.assertTrue(unique_insert_transaction.apply())
                     self.assertEqual(document.db_insert(doc), "ok")
                     fake_db.savepoint.assert_not_called()
+
+
+class TestPostgresDecimalMetadataCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.frappe import postgres_decimal_metadata
+
+        postgres_decimal_metadata._original_get_table_columns_description = None
+        postgres_decimal_metadata._patched_get_table_columns_description = None
+
+    def test_detects_native_precision_reporting(self):
+        from frappe_pg.compat.frappe import postgres_decimal_metadata
+
+        def old_description(self, table_name):
+            return self.sql("select data_type")
+
+        def fixed_description(self, table_name):
+            return self.sql("select numeric_precision, numeric_scale")
+
+        self.assertFalse(postgres_decimal_metadata._upstream_reports_numeric_precision(old_description))
+        self.assertTrue(postgres_decimal_metadata._upstream_reports_numeric_precision(fixed_description))
+
+    def test_enriches_numeric_metadata_and_restores_original(self):
+        from frappe_pg.compat.frappe import postgres_decimal_metadata
+
+        def old_description(self, table_name):
+            return [{"name": "amount", "type": "numeric"}, {"name": "title", "type": "varchar(140)"}]
+
+        database = types.SimpleNamespace(get_table_columns_description=old_description)
+        instance = types.SimpleNamespace(
+            sql=Mock(
+                return_value=[
+                    {"name": "amount", "numeric_precision": 30, "numeric_scale": 3},
+                ]
+            )
+        )
+        with patch.object(postgres_decimal_metadata, "_load_postgres_database", return_value=database):
+            self.assertTrue(postgres_decimal_metadata.is_needed())
+            self.assertTrue(postgres_decimal_metadata.apply())
+            installed = database.get_table_columns_description
+            self.assertFalse(postgres_decimal_metadata.apply())
+            result = installed(instance, "tabTest Decimal Config")
+            self.assertEqual(result[0]["type"], "decimal(30,3)")
+            self.assertEqual(result[1]["type"], "varchar(140)")
+            instance.sql.assert_called_once()
+            self.assertTrue(postgres_decimal_metadata.remove())
+            self.assertIs(database.get_table_columns_description, old_description)
+
+    def test_fixed_upstream_is_left_untouched(self):
+        from frappe_pg.compat.frappe import postgres_decimal_metadata
+
+        def fixed_description(self, table_name):
+            return self.sql("select numeric_precision, numeric_scale")
+
+        database = types.SimpleNamespace(get_table_columns_description=fixed_description)
+        with patch.object(postgres_decimal_metadata, "_load_postgres_database", return_value=database):
+            self.assertFalse(postgres_decimal_metadata.is_needed())
+            self.assertFalse(postgres_decimal_metadata.apply())
+            self.assertIs(database.get_table_columns_description, fixed_description)
