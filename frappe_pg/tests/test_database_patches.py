@@ -75,7 +75,7 @@ class TestQueryTransformers(unittest.TestCase):
         self.assertEqual(convert_mysql_zero_date_sentinel(query), expected)
 
     def test_zero_numeric_comparison_is_not_rewritten_as_date(self):
-        query = 'WHERE COALESCE(amount, 0) >= '0''
+        query = "WHERE COALESCE(amount, 0) >= '0'"
         self.assertEqual(convert_mysql_zero_date_sentinel(query), query)
 
     def test_mysql_date_sub_curdate_from_erpnext_dashboard(self):
@@ -321,6 +321,11 @@ class TestTransformQueryHook(unittest.TestCase):
     def test_zero_non_timestamp_param_is_unchanged(self):
         values = {"param1": "0"}
         query = 'SELECT * FROM "tabNote" WHERE "idx">%(param1)s'
+        self.assertIs(database_patches._normalize_zero_timestamp_params(query, values), values)
+
+    def test_zero_timestamp_equality_param_is_unchanged(self):
+        values = {"param1": "0"}
+        query = 'SELECT * FROM "tabNote" WHERE "creation"=%(param1)s'
         self.assertIs(database_patches._normalize_zero_timestamp_params(query, values), values)
 
     def test_postgres_json_results_are_serialized_like_mariadb(self):

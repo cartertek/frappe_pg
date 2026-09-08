@@ -9,6 +9,7 @@ tracing, execution, and error handling under Frappe's control.
 """
 
 import json
+import re
 
 from frappe.database.postgres.database import PostgresDatabase  # nosemgrep
 
@@ -30,12 +31,12 @@ def _normalize_zero_timestamp_params(query, values):
 
     params = set(
         re.findall(
-            r'"(?:creation|modified)"\s*>?=\s*%\((?P<param>[A-Za-z0-9_]+)\)s',
+            r'"(?:creation|modified)"\s*(?:>=|>)\s*%\((?P<param>[A-Za-z0-9_]+)\)s',
             query,
             re.IGNORECASE,
         )
     )
-    changed = [name for name in params if values.get(name) in {0, 0.0, "0", "0.0"}]
+    changed = [name for name in params if values.get(name) in {0, "0", "0.0"}]
     if not changed:
         return values
 
