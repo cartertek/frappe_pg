@@ -20,10 +20,12 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_zero_date_sentinel,
     convert_numeric_truthiness,
     expand_mysql_having_alias,
+    normalize_erpnext_advance_payment_currency_aggregate,
     normalize_erpnext_item_end_of_life_zero_date,
     normalize_erpnext_landed_cost_center_aggregate,
     normalize_erpnext_negative_invoice_voucher_literal,
     normalize_erpnext_production_plan_subitems_grouping,
+    normalize_erpnext_stock_voucher_group_order,
     normalize_erpnext_v15_bom_group_query,
     normalize_hrms_income_tax_salary_slip_grouping,
     normalize_hrms_legacy_string_literals,
@@ -356,6 +358,35 @@ class TestQueryTransformers(unittest.TestCase):
         )
         self.assertEqual(normalize_erpnext_production_plan_subitems_grouping(query), query)
 
+    def test_erpnext_advance_payment_currency_is_aggregated(self):
+        query = (
+            'SELECT ABS(SUM("amount")) "amount","currency" "account_currency" '
+            'FROM "tabAdvance Payment Ledger Entry" WHERE "company"=%(company)s'
+        )
+        transformed = normalize_erpnext_advance_payment_currency_aggregate(query)
+        self.assertIn('MAX("currency") "account_currency"', transformed)
+
+    def test_other_currency_projection_is_unchanged(self):
+        query = 'SELECT SUM("amount"),"currency" "account_currency" FROM "tabGL Entry"'
+        self.assertEqual(normalize_erpnext_advance_payment_currency_aggregate(query), query)
+
+    def test_erpnext_stock_voucher_group_order_matches_develop(self):
+        query = (
+            'SELECT "voucher_type","voucher_no","posting_date","posting_time","creation" '
+            'FROM "tabStock Ledger Entry" WHERE "is_cancelled"=0 '
+            'GROUP BY "voucher_type","voucher_no" '
+            'ORDER BY "posting_datetime" ORDER BY "creation"'
+        )
+        transformed = normalize_erpnext_stock_voucher_group_order(query)
+        self.assertIn('SELECT "voucher_type","voucher_no" FROM', transformed)
+        self.assertIn('ORDER BY MIN("posting_datetime")', transformed)
+        self.assertIn('ORDER BY MIN("creation")', transformed)
+        self.assertNotIn('"posting_date","posting_time","creation" FROM', transformed)
+
+    def test_other_stock_ledger_group_query_is_unchanged(self):
+        query = 'SELECT "item_code",SUM("actual_qty") FROM "tabStock Ledger Entry" GROUP BY "item_code"'
+        self.assertEqual(normalize_erpnext_stock_voucher_group_order(query), query)
+
     def test_erpnext_landed_cost_center_is_aggregated(self):
         query = """select sum(applicable_charges), cost_center
             from "tabLanded Cost Item"
@@ -461,6 +492,15 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         )
         transformed = normalize_hrms_shift_assignment_empty_end_date(query)
         self.assertNotIn('"end_date"=', transformed)
+        self.assertIn('"end_date" IS NULL', transformed)
+
+    def test_hrms_shift_assignment_empty_end_date_parameter_becomes_null(self):
+        query = (
+            'SELECT "employee" FROM "tabShift Assignment" WHERE '
+            '("end_date">=%(date)s OR "end_date" IS NULL OR "end_date"=%(param4)s)'
+        )
+        transformed = normalize_hrms_shift_assignment_empty_end_date(query)
+        self.assertNotIn('"end_date"=%(param4)s', transformed)
         self.assertIn('"end_date" IS NULL', transformed)
 
     def test_other_empty_string_comparison_is_unchanged(self):
