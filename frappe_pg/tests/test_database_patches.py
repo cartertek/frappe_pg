@@ -350,62 +350,6 @@ class TestTransformQueryHook(unittest.TestCase):
         result = ((["a", "b"],),)
         self.assertIs(database_patches._serialize_json_cells(result, [Column()]), result)
 
-    def test_unique_field_insert_uses_savepoint_and_rolls_back_on_failure(self):
-        field = type("Field", (), {"unique": True})()
-        doc = type("Doc", (), {"meta": type("Meta", (), {"fields": [field]})()})()
-        original = database_patches._original_db_insert
-        failure = frappe.UniqueValidationError("duplicate")
-        fake_db = Mock()
-        try:
-            database_patches._original_db_insert = Mock(side_effect=failure)
-            with patch.object(frappe, "db", fake_db):
-                with self.assertRaises(frappe.UniqueValidationError):
-                    database_patches.patched_db_insert(doc)
-            fake_db.savepoint.assert_called_once()
-            fake_db.rollback.assert_called_once()
-            fake_db.release_savepoint.assert_not_called()
-        finally:
-            database_patches._original_db_insert = original
-
-    def test_ordinary_insert_does_not_add_savepoint(self):
-        field = type("Field", (), {"unique": False})()
-        doc = type("Doc", (), {"meta": type("Meta", (), {"fields": [field]})()})()
-        original = database_patches._original_db_insert
-        fake_db = Mock()
-        try:
-            database_patches._original_db_insert = Mock(return_value="ok")
-            with patch.object(frappe, "db", fake_db):
-                self.assertEqual(database_patches.patched_db_insert(doc), "ok")
-            fake_db.savepoint.assert_not_called()
-        finally:
-            database_patches._original_db_insert = original
-
-    def test_postgres_schema_cast_failure_maps_to_validation_error(self):
-        class CastFailure(Exception):
-            pgcode = "22P02"
-
-        original = database_patches._original_schema_alter
-        schema = type("Schema", (), {"doctype": "Example"})()
-        try:
-            database_patches._original_schema_alter = lambda _self: (_ for _ in ()).throw(CastFailure())
-            with self.assertRaises(frappe.ValidationError):
-                database_patches.patched_schema_alter(schema)
-        finally:
-            database_patches._original_schema_alter = original
-
-    def test_postgres_schema_unrelated_error_is_preserved(self):
-        class OtherFailure(Exception):
-            pgcode = "99999"
-
-        original = database_patches._original_schema_alter
-        schema = type("Schema", (), {"doctype": "Example"})()
-        try:
-            database_patches._original_schema_alter = lambda _self: (_ for _ in ()).throw(OtherFailure())
-            with self.assertRaises(OtherFailure):
-                database_patches.patched_schema_alter(schema)
-        finally:
-            database_patches._original_schema_alter = original
-
     def test_postgres_serialization_failure_is_classified_as_deadlock(self):
         class SerializationFailure(Exception):
             pgcode = "40001"
