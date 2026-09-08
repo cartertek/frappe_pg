@@ -13,6 +13,8 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_double_quoted_literals,
     convert_mysql_update_join,
     convert_numeric_truthiness,
+    normalize_hrms_shift_assignment_empty_end_date,
+    normalize_hrms_skill_assessment_group_order,
     remove_index_hints,
 )
 
@@ -106,6 +108,31 @@ class TestQueryTransformers(unittest.TestCase):
         query = 'SELECT * FROM "tabX" WHERE "tabX"."a" AND "tabX"."b"'
         expected = 'SELECT * FROM "tabX" WHERE ("tabX"."a" <> 0) AND ("tabX"."b" <> 0)'
         self.assertEqual(convert_numeric_truthiness(query), expected)
+
+    def test_hrms_shift_assignment_empty_end_date_becomes_null(self):
+        query = (
+            'SELECT "employee" FROM "tabShift Assignment" WHERE '
+            '("end_date">=%(date)s OR "end_date" IS NULL OR "end_date"='
+            ')'
+        )
+        transformed = normalize_hrms_shift_assignment_empty_end_date(query)
+        self.assertNotIn('"end_date"=', transformed)
+        self.assertIn('"end_date" IS NULL', transformed)
+
+    def test_other_empty_string_comparison_is_unchanged(self):
+        query = 'SELECT "name" FROM "tabOther" WHERE "end_date"='
+        self.assertEqual(normalize_hrms_shift_assignment_empty_end_date(query), query)
+
+    def test_hrms_skill_assessment_group_order_uses_min_idx(self):
+        query = (
+            'SELECT "tabSkill Assessment"."skill",'
+            'AVG("tabSkill Assessment"."rating") "rating" '
+            'FROM "tabSkill Assessment" JOIN "tabInterview Feedback" ON 1=1 '
+            'GROUP BY "tabSkill Assessment"."skill" '
+            'ORDER BY "tabSkill Assessment"."idx"'
+        )
+        transformed = normalize_hrms_skill_assessment_group_order(query)
+        self.assertIn('ORDER BY MIN("tabSkill Assessment"."idx")', transformed)
 
     def test_double_quoted_mysql_string_literal_with_spaces(self):
         query = 'SELECT * FROM "tabSingles" WHERE doctype = "HR Settings" AND field = \'x\''

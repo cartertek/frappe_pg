@@ -301,7 +301,7 @@ def convert_numeric_truthiness(query):
             if re.search(r"\bBETWEEN\b", tail, re.IGNORECASE):
                 return match.group(0)
 
-        return f'{match.group("prefix")}{match.group("space")}' f'({match.group("identifier")} <> 0)'
+        return f'{match.group("prefix")}{match.group("space")}({match.group("identifier")} <> 0)'
 
     # Re-run until nested shapes such as ("claimed_amount" AND "return_amount")
     # are fully normalized. Replacements are idempotent because ``<> 0`` no
@@ -362,6 +362,42 @@ def convert_mysql_double_quoted_literals(query):
     query = literal.sub(replace, query)
     query = like_literal.sub(replace_like_literal, query)
     return in_list.sub(replace_in_list, query)
+
+
+def normalize_hrms_shift_assignment_empty_end_date(query):
+    """Treat HRMS Shift Assignment empty end dates as NULL on PostgreSQL.
+
+    MariaDB tolerates comparing a Date column to the empty string. PostgreSQL
+    does not. Restrict the rewrite to HRMS's Shift Assignment ``end_date``
+    predicates, where the application already treats NULL and empty as the same
+    open-ended value.
+    """
+    if not re.search(r'\bFROM\s+"tabShift Assignment"\b', query, re.IGNORECASE):
+        return query
+    pattern = re.compile(
+        r'(?P<field>(?:"tabShift Assignment"\.)?"end_date")\s*=\s*\'\'',
+        re.IGNORECASE,
+    )
+    return pattern.sub(r'\g<field> IS NULL', query)
+
+
+def normalize_hrms_skill_assessment_group_order(query):
+    """Aggregate HRMS Skill Assessment idx when ordering a grouped rating query."""
+    required = (
+        r'\bFROM\s+"tabSkill Assessment"\b',
+        r'AVG\s*\(\s*"tabSkill Assessment"\."rating"\s*\)',
+        r'GROUP\s+BY\s+"tabSkill Assessment"\."skill"',
+        r'ORDER\s+BY\s+"tabSkill Assessment"\."idx"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    return re.sub(
+        r'ORDER\s+BY\s+("tabSkill Assessment"\."idx")',
+        r'ORDER BY MIN(\1)',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
 
 
 def convert_mysql_update_join(query):
@@ -433,6 +469,8 @@ def apply_all_query_transformations(query):
     query = convert_date_format(query)
     query = convert_numeric_truthiness(query)
     query = convert_mysql_double_quoted_literals(query)
+    query = normalize_hrms_shift_assignment_empty_end_date(query)
+    query = normalize_hrms_skill_assessment_group_order(query)
     query = convert_mysql_update_join(query)
 
     # Debug: Log if IF() is still present after transformation
