@@ -96,19 +96,23 @@ def apply():
         Table = DocType(goal_doctype)
         date_format = "%m-%Y" if frappe.db.db_type != "postgres" else "MM-YYYY"
 
-        return dict(
-            frappe.qb.get_query(
-                table=goal_doctype,
-                fields=[
-                    DateFormat(Table[date_col], date_format).as_("month_year"),
-                    Function(aggregation, Table[goal_field]),
-                ],
-                filters=filters,
-                ignore_permissions=False,
-            )
-            .groupby("month_year")
-            .run()
-        )
+        query_args = {
+            "table": goal_doctype,
+            "fields": [
+                DateFormat(Table[date_col], date_format).as_("month_year"),
+                Function(aggregation, Table[goal_field]),
+            ],
+            "filters": filters,
+        }
+        # Frappe v16 added permission-aware Query Engine arguments. v15's
+        # Engine rejects ``ignore_permissions`` entirely, so only request the
+        # v16 behavior when that capability exists.
+        from frappe.database.query import Engine
+
+        if "ignore_permissions" in inspect.signature(Engine.get_query).parameters:
+            query_args["ignore_permissions"] = False
+
+        return dict(frappe.qb.get_query(**query_args).groupby("month_year").run())
 
     _patched_get_monthly_results = compatible_get_monthly_results
     goal.get_monthly_results = compatible_get_monthly_results  # nosemgrep
