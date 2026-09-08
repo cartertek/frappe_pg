@@ -426,3 +426,73 @@ class TestPaymentLedgerGroupingCompatibility(unittest.TestCase):
             self.assertFalse(payment_ledger_grouping.apply())
             self.assertTrue(payment_ledger_grouping.remove())
             self.assertIs(cls.query_for_outstanding, old_query)
+
+
+class TestPostgresBooleanValuesCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.frappe import postgres_boolean_values
+
+        postgres_boolean_values._original_value_get_sql = None
+        postgres_boolean_values._patched_value_get_sql = None
+        postgres_boolean_values._original_modify_values = None
+        postgres_boolean_values._patched_modify_values = None
+
+    def test_applies_to_literal_and_bound_boolean_paths(self):
+        from frappe_pg.compat.frappe import postgres_boolean_values
+
+        class ValueWrapper:
+            def __init__(self, value):
+                self.value = value
+
+            def get_sql(self):
+                return str(self.value)
+
+        def modify_values(values):
+            def old(value):
+                if isinstance(value, int):
+                    return str(value)
+                return value
+
+            if isinstance(values, dict):
+                return {key: old(value) for key, value in values.items()}
+            return old(values)
+
+        original_get_sql = ValueWrapper.get_sql
+        original_modify_values = modify_values
+        terms = types.SimpleNamespace(ParameterizedValueWrapper=ValueWrapper)
+        postgres = types.SimpleNamespace(modify_values=modify_values)
+        with patch.object(postgres_boolean_values, "_load_targets", return_value=(terms, postgres)):
+            self.assertTrue(postgres_boolean_values.is_needed())
+            self.assertTrue(postgres_boolean_values.apply())
+            self.assertEqual(ValueWrapper(True).get_sql(), "1")
+            self.assertEqual(
+                postgres.modify_values({"enabled": True, "disabled": False}),
+                {"enabled": "1", "disabled": "0"},
+            )
+            self.assertFalse(postgres_boolean_values.apply())
+            self.assertTrue(postgres_boolean_values.remove())
+            self.assertIs(ValueWrapper.get_sql, original_get_sql)
+            self.assertIs(postgres.modify_values, original_modify_values)
+
+    def test_fixed_upstream_is_left_untouched(self):
+        from frappe_pg.compat.frappe import postgres_boolean_values
+
+        class ValueWrapper:
+            def get_sql(self):
+                if isinstance(self.value, bool):
+                    self.value = str(int(self.value))
+                return str(self.value)
+
+        def modify_values(values):
+            def modify_value(value):
+                if isinstance(value, bool):
+                    return str(int(value))
+                return value
+
+            return modify_value(values)
+
+        terms = types.SimpleNamespace(ParameterizedValueWrapper=ValueWrapper)
+        postgres = types.SimpleNamespace(modify_values=modify_values)
+        with patch.object(postgres_boolean_values, "_load_targets", return_value=(terms, postgres)):
+            self.assertFalse(postgres_boolean_values.is_needed())
+            self.assertFalse(postgres_boolean_values.apply())
