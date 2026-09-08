@@ -323,7 +323,8 @@ def convert_mysql_date_arithmetic(query):
         return f"{expr} - INTERVAL '{amount} {unit}'"
 
     query = date_sub.sub(replace_date_sub, query)
-    return re.sub(r"\bCURDATE\(\)", "CURRENT_DATE", query, flags=re.IGNORECASE)
+    query = re.sub(r"\bCURDATE\(\)", "CURRENT_DATE", query, flags=re.IGNORECASE)
+    return re.sub(r"\bCURRENT_DATE\(\)", "CURRENT_DATE", query, flags=re.IGNORECASE)
 
 
 def convert_mysql_datediff(query):
@@ -1416,6 +1417,39 @@ def normalize_erpnext_batch_availability_grouping(query):
     return query
 
 
+def normalize_erpnext_serial_ledger_distinct_order(query):
+    """Include ERPNext's Stock Ledger creation tiebreaker in DISTINCT queries.
+
+    Older ERPNext selects a DISTINCT Stock Ledger projection while ordering by
+    posting_datetime and creation. PostgreSQL requires every ORDER BY expression
+    to be present in a DISTINCT projection. ERPNext develop fixes this by adding
+    creation to the select list; serial_and_batch_bundle already identifies the
+    SLE row, so this does not broaden the result set.
+    """
+    required = (
+        r'\bSELECT\s+DISTINCT\b',
+        r'\bFROM\s+"tabStock Ledger Entry"',
+        r'\bLEFT\s+JOIN\s+"tabSerial and Batch Entry"',
+        r'"tabStock Ledger Entry"\."serial_and_batch_bundle"',
+        r'\bORDER\s+BY\s+"tabStock Ledger Entry"\."posting_datetime"\s*,'
+        r'\s*"tabStock Ledger Entry"\."creation"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+
+    select_match = re.search(
+        r'\bSELECT\s+DISTINCT\b(?P<select>.+?)\bFROM\b', query, re.IGNORECASE | re.DOTALL
+    )
+    if not select_match:
+        return query
+    select_text = select_match.group("select")
+    if re.search(r'"tabStock Ledger Entry"\."creation"', select_text, re.IGNORECASE):
+        return query
+
+    insertion = ',"tabStock Ledger Entry"."creation" '
+    return query[: select_match.end("select")] + insertion + query[select_match.end("select") :]
+
+
 def normalize_erpnext_stock_ledger_batch_grouping(query):
     """Match ERPNext develop's grouped Stock Ledger batch query.
 
@@ -1680,6 +1714,7 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_landed_cost_center_aggregate(query)
     query = normalize_erpnext_budget_requested_amount(query)
     query = normalize_erpnext_batch_availability_grouping(query)
+    query = normalize_erpnext_serial_ledger_distinct_order(query)
     query = normalize_erpnext_stock_ledger_batch_grouping(query)
     query = normalize_erpnext_unreconcile_payment_grouping(query)
     query = normalize_erpnext_reserved_warehouse_distinct(query)
