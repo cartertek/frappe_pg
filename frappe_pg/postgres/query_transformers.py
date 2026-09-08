@@ -289,6 +289,45 @@ def convert_mysql_date_arithmetic(query):
     return re.sub(r"\bCURDATE\(\)", "CURRENT_DATE", query, flags=re.IGNORECASE)
 
 
+def expand_mysql_having_alias(query):
+    """Expand a simple SELECT alias referenced directly by HAVING.
+
+    MySQL permits ``HAVING alias > value`` while PostgreSQL requires the
+    underlying aggregate expression. This intentionally handles only a direct
+    alias predicate so more complex HAVING expressions are left untouched.
+    """
+    select_match = re.search(r"\bSELECT\b(?P<select>.+?)\bFROM\b", query, re.IGNORECASE | re.DOTALL)
+    if not select_match:
+        return query
+
+    aliases = {}
+    for item in split_by_comma(select_match.group("select")):
+        alias_match = re.match(
+            r"(?P<expr>.+?)\s+AS\s+(?P<alias>[A-Za-z_][A-Za-z0-9_$]*)\s*$",
+            item.strip(),
+            re.IGNORECASE | re.DOTALL,
+        )
+        if alias_match:
+            aliases[alias_match.group("alias").lower()] = alias_match.group("expr").strip()
+
+    if not aliases:
+        return query
+
+    having = re.compile(
+        r"(?P<prefix>\bHAVING\s+)(?P<alias>[A-Za-z_][A-Za-z0-9_$]*)"
+        r"(?P<space>\s*)(?P<operator><>|!=|<=|>=|=|<|>)",
+        re.IGNORECASE,
+    )
+
+    def replace(match):
+        expression = aliases.get(match.group("alias").lower())
+        if expression is None:
+            return match.group(0)
+        return f'{match.group("prefix")}({expression}){match.group("space")}{match.group("operator")}'
+
+    return having.sub(replace, query, count=1)
+
+
 def convert_numeric_truthiness(query):
     """Convert bare numeric identifiers in boolean predicates to PostgreSQL booleans.
 
@@ -423,9 +462,10 @@ def apply_all_query_transformations(query):
     3. Convert IFNULL to COALESCE (simple replacement)
     4. Convert DATE_FORMAT to TO_CHAR (simple replacement)
     5. Convert MySQL current-date arithmetic
-    6. Convert MySQL numeric truthiness in boolean predicates
-    7. Convert unambiguous double-quoted string literals
-    8. Convert simple MySQL UPDATE ... JOIN statements
+    6. Expand simple MySQL HAVING aliases
+    7. Convert MySQL numeric truthiness in boolean predicates
+    8. Convert unambiguous double-quoted string literals
+    9. Convert simple MySQL UPDATE ... JOIN statements
 
     Args:
         query: SQL query string
@@ -448,6 +488,7 @@ def apply_all_query_transformations(query):
     query = convert_ifnull_to_coalesce(query)
     query = convert_date_format(query)
     query = convert_mysql_date_arithmetic(query)
+    query = expand_mysql_having_alias(query)
     query = convert_numeric_truthiness(query)
     query = convert_mysql_double_quoted_literals(query)
     query = convert_mysql_update_join(query)
