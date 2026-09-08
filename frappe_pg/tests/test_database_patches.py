@@ -22,6 +22,7 @@ from frappe_pg.postgres.query_transformers import (
     expand_mysql_having_alias,
     normalize_erpnext_item_end_of_life_zero_date,
     normalize_erpnext_landed_cost_center_aggregate,
+    normalize_erpnext_negative_invoice_voucher_literal,
     normalize_erpnext_v15_bom_group_query,
     normalize_payment_request_single_match_grouping,
     remove_erpnext_inventory_dimension_default_order,
@@ -311,6 +312,20 @@ class TestQueryTransformers(unittest.TestCase):
     def test_unrelated_aggregate_projection_is_unchanged(self):
         query = 'select sum(amount), cost_center from "tabGL Entry"'
         self.assertEqual(normalize_erpnext_landed_cost_center_aggregate(query), query)
+
+    def test_erpnext_negative_invoice_voucher_type_becomes_string_literal(self):
+        query = """select "Purchase Invoice" as voucher_type, name as voucher_no
+            from "tabPurchase Invoice" where supplier = %s"""
+        transformed = normalize_erpnext_negative_invoice_voucher_literal(query)
+        self.assertIn("'Purchase Invoice' AS voucher_type", transformed)
+
+    def test_quoted_identifier_projection_is_unchanged(self):
+        query = 'select "Purchase Invoice" as label from "tabPurchase Invoice"'
+        self.assertEqual(normalize_erpnext_negative_invoice_voucher_literal(query), query)
+
+    def test_voucher_literal_without_matching_invoice_table_is_unchanged(self):
+        query = 'select "Purchase Invoice" as voucher_type from "tabOther"'
+        self.assertEqual(normalize_erpnext_negative_invoice_voucher_literal(query), query)
 
     def test_payment_request_single_match_name_is_aggregated(self):
         query = """SELECT "sq0"."payment_request" FROM (

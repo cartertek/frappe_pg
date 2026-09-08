@@ -661,6 +661,30 @@ def convert_mysql_double_quoted_literals(query):
     return in_list.sub(replace_in_list, query)
 
 
+def normalize_erpnext_negative_invoice_voucher_literal(query):
+    """Quote ERPNext's negative-outstanding voucher type as a SQL string.
+
+    Older ERPNext interpolates ``"Purchase Invoice"``/``"Sales Invoice"``
+    into a SELECT projection, relying on MySQL's double-quoted string behavior.
+    PostgreSQL reads it as an identifier. Restrict the rewrite to the exact
+    negative-invoice query shape where the same value also names the source
+    invoice table and the projection alias is ``voucher_type``.
+    """
+    for voucher_type in ("Purchase Invoice", "Sales Invoice"):
+        if not re.search(rf'\bFROM\s+"tab{re.escape(voucher_type)}"', query, re.IGNORECASE):
+            continue
+        projection = re.compile(
+            rf'"{re.escape(voucher_type)}"(?P<space>\s+)(?:AS\s+)?(?P<alias>"?voucher_type"?)\b',
+            re.IGNORECASE,
+        )
+        return projection.sub(
+            lambda match: f"'{voucher_type}'{match.group('space')}AS {match.group('alias')}",
+            query,
+            count=1,
+        )
+    return query
+
+
 def normalize_payment_request_single_match_grouping(query):
     """Aggregate Payment Request name in ERPNext's single-match grouping query.
 
@@ -832,6 +856,7 @@ def apply_all_query_transformations(query):
     query = remove_erpnext_inventory_dimension_default_order(query)
     query = convert_numeric_truthiness(query)
     query = convert_mysql_double_quoted_literals(query)
+    query = normalize_erpnext_negative_invoice_voucher_literal(query)
     query = normalize_payment_request_single_match_grouping(query)
     query = cast_timestamp_pattern_matches(query)
     query = convert_mysql_inner_join_without_condition(query)
