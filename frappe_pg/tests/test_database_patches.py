@@ -9,6 +9,7 @@ from frappe.database.utils import EmptyQueryValues
 from frappe_pg.postgres import database_patches
 from frappe_pg.postgres.query_transformers import (
     apply_all_query_transformations,
+    cast_timestamp_pattern_matches,
     convert_date_format,
     convert_if_to_case,
     convert_ifnull_to_coalesce,
@@ -21,6 +22,9 @@ from frappe_pg.postgres.query_transformers import (
     expand_mysql_having_alias,
     normalize_erpnext_item_end_of_life_zero_date,
     normalize_erpnext_v15_bom_group_query,
+    normalize_hrms_shift_assignment_empty_end_date,
+    normalize_hrms_skill_assessment_group_order,
+    normalize_payment_request_single_match_grouping,
     remove_erpnext_inventory_dimension_default_order,
     remove_index_hints,
     remove_order_by_from_aggregate_only_query,
@@ -303,6 +307,29 @@ class TestQueryTransformers(unittest.TestCase):
         expected = 'SELECT * FROM "tabX" WHERE ("tabX"."a" <> 0) AND ("tabX"."b" <> 0)'
         self.assertEqual(convert_numeric_truthiness(query), expected)
 
+    def test_payment_request_single_match_name_is_aggregated(self):
+        query = """SELECT "sq0"."payment_request" FROM (
+            SELECT "reference_doctype","reference_name","outstanding_amount" "allocated_amount",
+            "name" "payment_request",COUNT(*) "count" FROM "tabPayment Request"
+            WHERE "docstatus"= '1'
+            GROUP BY "reference_doctype","reference_name","outstanding_amount"
+        ) "sq0" WHERE "sq0"."count"= '1'"""
+        transformed = normalize_payment_request_single_match_grouping(query)
+        self.assertIn('MIN("name") "payment_request"', transformed)
+
+    def test_other_grouped_name_projection_is_unchanged(self):
+        query = 'SELECT "name",COUNT(*) "count" FROM "tabOther" GROUP BY "status"'
+        self.assertEqual(normalize_payment_request_single_match_grouping(query), query)
+
+    def test_timestamp_like_is_cast_to_text(self):
+        query = """SELECT "name" FROM "tabLeave Ledger Entry" WHERE "creation" ILIKE '2026-04-01%'"""
+        expected = """SELECT "name" FROM "tabLeave Ledger Entry" WHERE CAST("creation" AS TEXT) ILIKE '2026-04-01%'"""
+        self.assertEqual(cast_timestamp_pattern_matches(query), expected)
+
+    def test_non_timestamp_like_is_unchanged(self):
+        query = """SELECT "name" FROM "tabUser" WHERE "name" ILIKE 'test%'"""
+        self.assertEqual(cast_timestamp_pattern_matches(query), query)
+
     def test_mysql_inner_join_without_condition_becomes_cross_join(self):
         query = """SELECT gl.party FROM "tabGL Entry" gl
         INNER JOIN "tabSupplier" s
@@ -315,6 +342,31 @@ class TestQueryTransformers(unittest.TestCase):
     def test_conditioned_inner_join_is_unchanged(self):
         query = 'SELECT * FROM "tabA" a INNER JOIN "tabB" b ON b.name=a.b WHERE a.name=%s'
         self.assertEqual(convert_mysql_inner_join_without_condition(query), query)
+
+    def test_hrms_shift_assignment_empty_end_date_becomes_null(self):
+        query = (
+            'SELECT "employee" FROM "tabShift Assignment" WHERE '
+            '("end_date">=%(date)s OR "end_date" IS NULL OR "end_date"='
+            ')'
+        )
+        transformed = normalize_hrms_shift_assignment_empty_end_date(query)
+        self.assertNotIn('"end_date"=', transformed)
+        self.assertIn('"end_date" IS NULL', transformed)
+
+    def test_other_empty_string_comparison_is_unchanged(self):
+        query = 'SELECT "name" FROM "tabOther" WHERE "end_date"='
+        self.assertEqual(normalize_hrms_shift_assignment_empty_end_date(query), query)
+
+    def test_hrms_skill_assessment_group_order_uses_min_idx(self):
+        query = (
+            'SELECT "tabSkill Assessment"."skill",'
+            'AVG("tabSkill Assessment"."rating") "rating" '
+            'FROM "tabSkill Assessment" JOIN "tabInterview Feedback" ON 1=1 '
+            'GROUP BY "tabSkill Assessment"."skill" '
+            'ORDER BY "tabSkill Assessment"."idx"'
+        )
+        transformed = normalize_hrms_skill_assessment_group_order(query)
+        self.assertIn('ORDER BY MIN("tabSkill Assessment"."idx")', transformed)
 
     def test_double_quoted_mysql_string_literal_with_spaces(self):
         query = 'SELECT * FROM "tabSingles" WHERE doctype = "HR Settings" AND field = \'x\''

@@ -679,6 +679,50 @@ def convert_mysql_double_quoted_literals(query):
     return in_list.sub(replace_in_list, query)
 
 
+def normalize_payment_request_single_match_grouping(query):
+    """Aggregate Payment Request name in ERPNext's single-match grouping query.
+
+    ERPNext groups Payment Requests by reference tuple, selects ``name`` and
+    ``COUNT(*)``, then keeps only groups whose count is one. MariaDB permits the
+    non-grouped ``name`` projection; PostgreSQL does not. ``MIN(name)`` is
+    equivalent for the only rows that survive the outer ``count = 1`` filter.
+    """
+    required = (
+        r'\bFROM\s+"tabPayment Request"\b',
+        r'COUNT\s*\(\s*\*\s*\)\s+(?:AS\s+)?"count"',
+        r'GROUP\s+BY\s+"reference_doctype"\s*,\s*"reference_name"\s*,\s*"outstanding_amount"',
+        r'WHERE\s+"sq0"\."count"\s*=\s*[\'"]?1[\'"]?',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE | re.DOTALL) for pattern in required):
+        return query
+
+    name_projection = re.compile(
+        r'(?P<name>(?:"tabPayment Request"\.)?"name")\s+(?:AS\s+)?"payment_request"',
+        re.IGNORECASE,
+    )
+    return name_projection.sub(r'MIN(\g<name>) "payment_request"', query, count=1)
+
+
+def cast_timestamp_pattern_matches(query):
+    """Cast Frappe timestamp fields to text for MySQL-style LIKE matching.
+
+    MySQL permits LIKE against datetime values via implicit string coercion.
+    PostgreSQL requires an explicit cast. Frappe's standard ``creation`` and
+    ``modified`` fields are timestamps, so those two fields are safe to identify
+    without application metadata.
+    """
+    pattern = re.compile(
+        r'(?<![A-Za-z0-9_])(?P<field>(?:"[^"]+"\.)?"(?:creation|modified)")'
+        r'(?P<space>\s+)(?P<op>I?LIKE)(?P<after>\s+)',
+        re.IGNORECASE,
+    )
+
+    def replace(match):
+        return f'CAST({match.group("field")} AS TEXT){match.group("space")}{match.group("op")}{match.group("after")}'
+
+    return pattern.sub(replace, query)
+
+
 def convert_mysql_inner_join_without_condition(query):
     """Translate MySQL INNER JOIN-without-condition into PostgreSQL CROSS JOIN.
 
@@ -698,6 +742,42 @@ def convert_mysql_inner_join_without_condition(query):
         return f'CROSS JOIN {match.group("table")}{match.group("alias") or ""}{match.group("space")}{match.group("next")}'
 
     return pattern.sub(replace, query)
+
+
+def normalize_hrms_shift_assignment_empty_end_date(query):
+    """Treat HRMS Shift Assignment empty end dates as NULL on PostgreSQL.
+
+    MariaDB tolerates comparing a Date column to the empty string. PostgreSQL
+    does not. Restrict the rewrite to HRMS's Shift Assignment ``end_date``
+    predicates, where the application already treats NULL and empty as the same
+    open-ended value.
+    """
+    if not re.search(r'\bFROM\s+"tabShift Assignment"\b', query, re.IGNORECASE):
+        return query
+    pattern = re.compile(
+        r'(?P<field>(?:"tabShift Assignment"\.)?"end_date")\s*=\s*\'\'',
+        re.IGNORECASE,
+    )
+    return pattern.sub(r'\g<field> IS NULL', query)
+
+
+def normalize_hrms_skill_assessment_group_order(query):
+    """Aggregate HRMS Skill Assessment idx when ordering a grouped rating query."""
+    required = (
+        r'\bFROM\s+"tabSkill Assessment"\b',
+        r'AVG\s*\(\s*"tabSkill Assessment"\."rating"\s*\)',
+        r'GROUP\s+BY\s+"tabSkill Assessment"\."skill"',
+        r'ORDER\s+BY\s+"tabSkill Assessment"\."idx"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    return re.sub(
+        r'ORDER\s+BY\s+("tabSkill Assessment"\."idx")',
+        r'ORDER BY MIN(\1)',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
 
 
 def convert_mysql_update_join(query):
@@ -783,7 +863,11 @@ def apply_all_query_transformations(query):
     query = remove_erpnext_inventory_dimension_default_order(query)
     query = convert_numeric_truthiness(query)
     query = convert_mysql_double_quoted_literals(query)
+    query = normalize_payment_request_single_match_grouping(query)
+    query = cast_timestamp_pattern_matches(query)
     query = convert_mysql_inner_join_without_condition(query)
+    query = normalize_hrms_shift_assignment_empty_end_date(query)
+    query = normalize_hrms_skill_assessment_group_order(query)
     query = convert_mysql_update_join(query)
 
     # Debug: Log if IF() is still present after transformation
