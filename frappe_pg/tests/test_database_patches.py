@@ -339,7 +339,8 @@ class TestQueryTransformers(unittest.TestCase):
             "tabBOM"."name" "main_bom","tabBOM Item"."is_phantom_item"
             FROM "tabBOM Item" JOIN "tabBOM" ON "tabBOM"."name"="tabBOM Item"."parent"
             JOIN "tabItem" ON "tabBOM Item"."item_code"="tabItem"."name"
-            GROUP BY "tabBOM Item"."item_code" ORDER BY "tabBOM Item"."idx"""
+            GROUP BY "tabBOM Item"."item_code" ORDER BY "tabBOM Item"."idx"
+            """
         transformed = normalize_erpnext_production_plan_subitems_grouping(query)
         self.assertIn(
             'MAX("tabItem"."default_material_request_type") AS "default_material_request_type"', transformed
@@ -451,15 +452,14 @@ GROUP BY "tabSalary Slip"."employee","tabSalary Detail"."salary_component"""
     def test_hrms_shift_assignment_empty_end_date_becomes_null(self):
         query = (
             'SELECT "employee" FROM "tabShift Assignment" WHERE '
-            '("end_date">=%(date)s OR "end_date" IS NULL OR "end_date"='
-            ')'
+            "(\"end_date\">=%(date)s OR \"end_date\" IS NULL OR \"end_date\"='')"
         )
         transformed = normalize_hrms_shift_assignment_empty_end_date(query)
         self.assertNotIn('"end_date"=', transformed)
         self.assertIn('"end_date" IS NULL', transformed)
 
     def test_other_empty_string_comparison_is_unchanged(self):
-        query = 'SELECT "name" FROM "tabOther" WHERE "end_date"='
+        query = "SELECT \"name\" FROM \"tabOther\" WHERE \"end_date\"=''"
         self.assertEqual(normalize_hrms_shift_assignment_empty_end_date(query), query)
 
     def test_hrms_skill_assessment_group_order_uses_min_idx(self):
