@@ -18,6 +18,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_zero_date_sentinel,
     convert_numeric_truthiness,
     expand_mysql_having_alias,
+    normalize_erpnext_item_end_of_life_zero_date,
     normalize_erpnext_v15_bom_group_query,
     remove_erpnext_inventory_dimension_default_order,
     remove_index_hints,
@@ -133,7 +134,7 @@ class TestQueryTransformers(unittest.TestCase):
             'WHERE "email_account"=%(param1)s AND "uid">0 ORDER BY "creation" DESC'
         )
         expected = (
-            'SELECT MAX("uid") "uid" FROM "tabCommunication" ' 'WHERE "email_account"=%(param1)s AND "uid">0'
+            'SELECT MAX("uid") "uid" FROM "tabCommunication" WHERE "email_account"=%(param1)s AND "uid">0'
         )
         self.assertEqual(remove_order_by_from_aggregate_only_query(query), expected)
 
@@ -145,6 +146,23 @@ class TestQueryTransformers(unittest.TestCase):
         for query in cases:
             with self.subTest(query=query):
                 self.assertEqual(remove_order_by_from_aggregate_only_query(query), query)
+
+    def test_erpnext_item_zero_date_sentinel_uses_null_semantics(self):
+        cases = {
+            "end_of_life='0000-00-00'": "end_of_life IS NULL",
+            "\"tabItem\".\"end_of_life\" = '0000-00-00'": '"tabItem"."end_of_life" IS NULL',
+            "coalesce(end_of_life, '0000-00-00')='0000-00-00'": "end_of_life IS NULL",
+            (
+                "and (end_of_life is null or end_of_life='0000-00-00' or end_of_life > %s)"
+            ): "and (end_of_life is null or end_of_life IS NULL or end_of_life > %s)",
+        }
+        for query, expected in cases.items():
+            with self.subTest(query=query):
+                self.assertEqual(normalize_erpnext_item_end_of_life_zero_date(query), expected)
+
+    def test_unrelated_zero_date_literal_is_unchanged(self):
+        query = "posting_date = '0000-00-00'"
+        self.assertEqual(normalize_erpnext_item_end_of_life_zero_date(query), query)
 
     def test_erpnext_v15_exploded_bom_group_query_is_normalized(self):
         query = """select
