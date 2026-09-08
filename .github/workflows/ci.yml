@@ -470,6 +470,16 @@ jobs:
         if: matrix.app != 'frappe'
         working-directory: /home/runner/frappe-bench
         run: |
+          # ERPNext's own upstream test setup includes the Payments app. Several
+          # ERPNext test-record dependencies (for example Payment Gateway) live
+          # there rather than in ERPNext itself. Match upstream's branch choice.
+          if [[ "${{ matrix.frappe }}" == "version-15" ]]; then
+            payments_branch=version-15
+          else
+            payments_branch=develop
+          fi
+          bench get-app --branch "$payments_branch" payments https://github.com/frappe/payments.git
+
           if [[ "${{ matrix.app }}" == "hrms" ]]; then
             bench get-app --branch "${{ matrix.app_branch }}" erpnext https://github.com/frappe/erpnext.git
             bench get-app --branch "${{ matrix.app_branch }}" hrms https://github.com/frappe/hrms.git
@@ -506,8 +516,10 @@ jobs:
           bench --site test_site install-app frappe_pg
 
           if [[ "${{ matrix.app }}" == "erpnext" ]]; then
+            bench --site test_site install-app payments
             bench --site test_site install-app erpnext
           elif [[ "${{ matrix.app }}" == "hrms" ]]; then
+            bench --site test_site install-app payments
             bench --site test_site install-app erpnext
             bench --site test_site install-app hrms
           fi
