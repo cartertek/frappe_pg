@@ -276,49 +276,112 @@ class TestPostgresDecimalMetadataCompatibility(unittest.TestCase):
     def test_detects_native_precision_reporting(self):
         from frappe_pg.compat.frappe import postgres_decimal_metadata
 
-        def old_description(self, table_name):
+        def old_get_column_type(self, doctype, column):
             return self.sql("select data_type")
 
-        def fixed_description(self, table_name):
+        def fixed_get_column_type(self, doctype, column):
             return self.sql("select numeric_precision, numeric_scale")
 
-        self.assertFalse(postgres_decimal_metadata._upstream_reports_numeric_precision(old_description))
-        self.assertTrue(postgres_decimal_metadata._upstream_reports_numeric_precision(fixed_description))
+        self.assertFalse(postgres_decimal_metadata._upstream_reports_numeric_precision(old_get_column_type))
+        self.assertTrue(postgres_decimal_metadata._upstream_reports_numeric_precision(fixed_get_column_type))
 
-    def test_enriches_numeric_metadata_and_restores_original(self):
+    def test_enriches_numeric_column_type_and_restores_original(self):
         from frappe_pg.compat.frappe import postgres_decimal_metadata
 
-        def old_description(self, table_name):
-            return [{"name": "amount", "type": "numeric"}, {"name": "title", "type": "varchar(140)"}]
+        def old_get_column_type(self, doctype, column):
+            return "numeric" if column == "amount" else "character varying"
 
-        database = types.SimpleNamespace(get_table_columns_description=old_description)
+        database = types.SimpleNamespace(get_column_type=old_get_column_type)
         instance = types.SimpleNamespace(
-            sql=Mock(
-                return_value=[
-                    {"name": "amount", "numeric_precision": 30, "numeric_scale": 3},
-                ]
-            )
+            sql=Mock(return_value=[{"numeric_precision": 30, "numeric_scale": 3}])
         )
-        with patch.object(postgres_decimal_metadata, "_load_postgres_database", return_value=database):
+        fake_utils = types.ModuleType("frappe.utils")
+        fake_utils.get_table_name = lambda doctype: f"tab{doctype}"
+        with (
+            patch.object(postgres_decimal_metadata, "_load_postgres_database", return_value=database),
+            patch.dict(sys.modules, {"frappe.utils": fake_utils}),
+        ):
             self.assertTrue(postgres_decimal_metadata.is_needed())
             self.assertTrue(postgres_decimal_metadata.apply())
-            installed = database.get_table_columns_description
+            installed = database.get_column_type
             self.assertFalse(postgres_decimal_metadata.apply())
-            result = installed(instance, "tabTest Decimal Config")
-            self.assertEqual(result[0]["type"], "decimal(30,3)")
-            self.assertEqual(result[1]["type"], "varchar(140)")
-            instance.sql.assert_called_once()
+            self.assertEqual(installed(instance, "Test Decimal Config", "amount"), "decimal(30,3)")
+            self.assertEqual(installed(instance, "Test Decimal Config", "title"), "character varying")
+            instance.sql.assert_called_once_with(
+                unittest.mock.ANY,
+                ("tabTest Decimal Config", "amount"),
+                as_dict=True,
+            )
             self.assertTrue(postgres_decimal_metadata.remove())
-            self.assertIs(database.get_table_columns_description, old_description)
+            self.assertIs(database.get_column_type, old_get_column_type)
 
     def test_fixed_upstream_is_left_untouched(self):
         from frappe_pg.compat.frappe import postgres_decimal_metadata
 
-        def fixed_description(self, table_name):
+        def fixed_get_column_type(self, doctype, column):
             return self.sql("select numeric_precision, numeric_scale")
 
-        database = types.SimpleNamespace(get_table_columns_description=fixed_description)
+        database = types.SimpleNamespace(get_column_type=fixed_get_column_type)
         with patch.object(postgres_decimal_metadata, "_load_postgres_database", return_value=database):
             self.assertFalse(postgres_decimal_metadata.is_needed())
             self.assertFalse(postgres_decimal_metadata.apply())
-            self.assertIs(database.get_table_columns_description, fixed_description)
+            self.assertIs(database.get_column_type, fixed_get_column_type)
+
+
+class TestPostgresUniqueViolationCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.frappe import postgres_unique_violation
+
+        postgres_unique_violation._original_is_unique_key_violation = None
+        postgres_unique_violation._patched_is_unique_key_violation = None
+
+    def test_applies_once_classifies_custom_unique_index_and_restores(self):
+        from frappe_pg.compat.frappe import postgres_unique_violation
+
+        class Database:
+            @staticmethod
+            def is_unique_key_violation(exc):
+                return getattr(exc, "pgcode", None) == "23505" and "_key" in str(exc)
+
+            @staticmethod
+            def is_duplicate_entry(exc):
+                return getattr(exc, "pgcode", None) == "23505"
+
+            @staticmethod
+            def is_primary_key_violation(exc):
+                return "_pkey" in str(exc)
+
+        original = Database.is_unique_key_violation
+        custom_unique = type("UniqueViolation", (Exception,), {"pgcode": "23505"})("unique_bill_no")
+        primary_key = type("UniqueViolation", (Exception,), {"pgcode": "23505"})("tabDoc_pkey")
+        with patch.object(postgres_unique_violation, "_load_postgres_database", return_value=Database):
+            self.assertTrue(postgres_unique_violation.is_needed())
+            self.assertTrue(postgres_unique_violation.apply())
+            self.assertTrue(postgres_unique_violation.is_applied())
+            self.assertFalse(postgres_unique_violation.apply())
+            self.assertTrue(Database.is_unique_key_violation(custom_unique))
+            self.assertFalse(Database.is_unique_key_violation(primary_key))
+            self.assertTrue(postgres_unique_violation.remove())
+            self.assertIs(Database.is_unique_key_violation, original)
+
+    def test_fixed_upstream_is_left_untouched(self):
+        from frappe_pg.compat.frappe import postgres_unique_violation
+
+        class Database:
+            @staticmethod
+            def is_unique_key_violation(exc):
+                return Database.is_duplicate_entry(exc) and not Database.is_primary_key_violation(exc)
+
+            @staticmethod
+            def is_duplicate_entry(exc):
+                return True
+
+            @staticmethod
+            def is_primary_key_violation(exc):
+                return False
+
+        original = Database.is_unique_key_violation
+        with patch.object(postgres_unique_violation, "_load_postgres_database", return_value=Database):
+            self.assertFalse(postgres_unique_violation.is_needed())
+            self.assertFalse(postgres_unique_violation.apply())
+            self.assertIs(Database.is_unique_key_violation, original)
