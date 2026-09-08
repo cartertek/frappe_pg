@@ -329,7 +329,8 @@ class TestQueryTransformers(unittest.TestCase):
             "tabBOM"."name" "main_bom","tabBOM Item"."is_phantom_item"
             FROM "tabBOM Item" JOIN "tabBOM" ON "tabBOM"."name"="tabBOM Item"."parent"
             JOIN "tabItem" ON "tabBOM Item"."item_code"="tabItem"."name"
-            GROUP BY "tabBOM Item"."item_code" ORDER BY "tabBOM Item"."idx"""
+            GROUP BY "tabBOM Item"."item_code" ORDER BY "tabBOM Item"."idx"
+            """
         transformed = normalize_erpnext_production_plan_subitems_grouping(query)
         self.assertIn(
             'MAX("tabItem"."default_material_request_type") AS "default_material_request_type"', transformed
