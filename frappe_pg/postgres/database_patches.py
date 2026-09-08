@@ -11,7 +11,9 @@ tracing, execution, and error handling under Frappe's control.
 import json
 import re
 
+import frappe
 from frappe.database.postgres.database import PostgresDatabase  # nosemgrep
+from frappe.database.postgres.schema import PostgresSchema
 
 from .db_functions import create_missing_functions
 from .query_transformers import apply_all_query_transformations
@@ -19,6 +21,7 @@ from .query_transformers import apply_all_query_transformations
 _original_transform_query = None
 _original_transform_result = None
 _original_is_deadlocked = None
+_original_schema_alter = None
 _patches_applied = False
 
 _JSON_TYPE_OIDS = {114, 3802}
@@ -89,9 +92,34 @@ def patched_is_deadlocked(exc):
     return getattr(exc, "pgcode", None) == "40001" or _original_is_deadlocked(exc)
 
 
+_INCOMPATIBLE_TYPE_PGCODES = {"42804", "22P02", "22003"}
+
+
+def patched_schema_alter(self):
+    """Map PostgreSQL cast failures to Frappe's incompatible-values validation error.
+
+    Frappe develop treats these PostgreSQL errors like MariaDB's truncated-value
+    error when changing a DocType field type. Older supported Frappe branches
+    leak the driver exception instead.
+    """
+    try:
+        return _original_schema_alter(self)
+    except Exception as exc:
+        if getattr(exc, "pgcode", None) not in _INCOMPATIBLE_TYPE_PGCODES:
+            raise
+        raise frappe.ValidationError(
+            f"Cannot change field type in {self.doctype}: some existing values cannot be converted to the new type"
+        ) from exc
+
+
 def apply_postgres_fixes():
     """Install the query transformation hook once per process."""
-    global _original_transform_query, _original_transform_result, _original_is_deadlocked, _patches_applied
+    global \
+        _original_transform_query, \
+        _original_transform_result, \
+        _original_is_deadlocked, \
+        _original_schema_alter, \
+        _patches_applied
 
     if _patches_applied:
         return
@@ -99,9 +127,11 @@ def apply_postgres_fixes():
     _original_transform_query = PostgresDatabase._transform_query
     _original_transform_result = PostgresDatabase._transform_result
     _original_is_deadlocked = PostgresDatabase.is_deadlocked
+    _original_schema_alter = PostgresSchema.alter
     PostgresDatabase._transform_query = patched_transform_query  # nosemgrep
     PostgresDatabase._transform_result = patched_transform_result  # nosemgrep
     PostgresDatabase.is_deadlocked = staticmethod(patched_is_deadlocked)  # nosemgrep
+    PostgresSchema.alter = patched_schema_alter  # nosemgrep
     _patches_applied = True
 
 
@@ -118,6 +148,8 @@ def remove_postgres_fixes():
         PostgresDatabase._transform_result = _original_transform_result  # nosemgrep
     if PostgresDatabase.is_deadlocked == patched_is_deadlocked:
         PostgresDatabase.is_deadlocked = staticmethod(_original_is_deadlocked)  # nosemgrep
+    if PostgresSchema.alter == patched_schema_alter:
+        PostgresSchema.alter = _original_schema_alter  # nosemgrep
 
     _patches_applied = False
 
