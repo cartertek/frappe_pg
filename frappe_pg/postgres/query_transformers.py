@@ -562,6 +562,105 @@ def qualify_frappe_grouped_order_aggregate(query):
     return pattern.sub(replace, query)
 
 
+def normalize_erpnext_bom_items_grouping(query):
+    """Make legacy ERPNext get_bom_items_as_dict queries PostgreSQL-valid.
+
+    ERPNext v15/v16 build several raw-SQL BOM queries that group by bare
+    ``item_code``/``stock_uom`` while joining BOM Item, BOM and Item tables.
+    Besides making the group keys ambiguous, MariaDB permits many dependent
+    columns outside the GROUP BY. ERPNext develop fixes this by qualifying the
+    group keys, aggregating dependent scalar values, grouping semantic keys
+    such as operation and the phantom-BOM pair, and ordering by an aggregate
+    idx. Apply those rules only to the distinctive get_bom_items_as_dict shape.
+    """
+    markers = (
+        r'\bFROM\s+"tabBOM(?: Explosion| Scrap| Secondary)? Item"\s+bom_item\b',
+        r'\bJOIN\s+"tabBOM"\s+bom\s+ON\s+bom_item\.parent\s*=\s*bom\.name',
+        r'\bJOIN\s+"tabItem"\s+item\s+ON\s+item\.name\s*=\s*bom_item\.item_code',
+        r'\bGROUP\s+BY\s+item_code\b',
+        r'\bSUM\s*\(.*?bom_item\.(?:stock_qty|qty)',
+    )
+    if any(not re.search(marker, query, re.IGNORECASE | re.DOTALL) for marker in markers):
+        return query
+
+    select_start = re.search(r"\bSELECT\b", query, re.IGNORECASE)
+    if not select_start:
+        return query
+    from_start = _find_top_level_keyword(query, "FROM", select_start.end())
+    if from_start is None:
+        return query
+
+    select_text = query[select_start.end() : from_start]
+    selected_items = [item.strip() for item in split_by_comma(select_text)]
+
+    # Build the semantic GROUP BY keys used by current ERPNext. Item.stock_uom
+    # is functionally dependent on item_code but is kept as an explicit key to
+    # preserve the historical grouping shape. Optional keys are added only when
+    # the legacy query actually selects them.
+    group_keys = ["bom_item.item_code", "item.stock_uom"]
+    normalized_select = " ".join(selected_items).lower()
+    for field in ("operation", "operation_row_id", "secondary_item_type"):
+        if re.search(rf"\bbom_item\.{field}\b", normalized_select):
+            group_keys.append(f"bom_item.{field}")
+    has_phantom = re.search(r"\bbom_item\.is_phantom_item\b", normalized_select)
+    has_bom_no = re.search(r"\bbom_item\.bom_no\b", normalized_select)
+    if has_phantom and has_bom_no:
+        group_keys.extend(["bom_item.bom_no", "bom_item.is_phantom_item"])
+
+    simple_column = re.compile(
+        r'^(?P<expr>(?:bom_item|bom|item|item_default)\.[A-Za-z_][A-Za-z0-9_]*)'
+        r'(?P<alias>\s+(?:AS\s+)?(?:"?[A-Za-z_][A-Za-z0-9_]*"?))?$',
+        re.IGNORECASE,
+    )
+    key_set = {key.lower() for key in group_keys}
+    transformed_items = []
+    for item in selected_items:
+        match = simple_column.match(item)
+        if match:
+            expr = match.group("expr")
+            if expr.lower() in key_set:
+                transformed_items.append(item)
+                continue
+            # Keep bom_no/is_phantom_item paired as keys; for older query shapes
+            # that expose only one of them, aggregate rather than inventing a key.
+            aggregate = "MIN" if expr.lower() == "bom_item.idx" else "MAX"
+            alias = match.group("alias") or f" AS {expr.rsplit('.', 1)[1]}"
+            transformed_items.append(f"{aggregate}({expr}){alias}")
+            continue
+
+        if re.search(r"\bSUM\s*\(", item, re.IGNORECASE) and re.search(
+            r"\bbom_item\.(?:rate|base_rate)\b", item, re.IGNORECASE
+        ):
+            item = re.sub(
+                r"\bbom_item\.(rate|base_rate)\b",
+                lambda match: f"MAX(bom_item.{match.group(1)})",
+                item,
+                flags=re.IGNORECASE,
+            )
+        transformed_items.append(item)
+
+    rebuilt_select = (
+        query[select_start.start() : select_start.end()] + " " + ", ".join(transformed_items) + " "
+    )
+    query = query[: select_start.start()] + rebuilt_select + query[from_start:]
+
+    group_by = "GROUP BY " + ", ".join(group_keys)
+    query = re.sub(
+        r"\bGROUP\s+BY\s+item_code\s*,\s*stock_uom(?:\s*,\s*(?:operation|operation_row_id|secondary_item_type))?",
+        group_by,
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(
+        r"\bORDER\s+BY\s+idx\b",
+        "ORDER BY MIN(bom_item.idx)",
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
 def remove_erpnext_inventory_dimension_default_order(query):
     """Remove Frappe's implicit modified ordering from ERPNext's DISTINCT inventory-dimension query.
 
@@ -1126,6 +1225,7 @@ def apply_all_query_transformations(query):
     query = expand_mysql_having_alias(query)
     query = remove_order_by_from_aggregate_only_query(query)
     query = normalize_erpnext_v15_bom_group_query(query)
+    query = normalize_erpnext_bom_items_grouping(query)
     query = qualify_frappe_grouped_order_aggregate(query)
     query = remove_erpnext_inventory_dimension_default_order(query)
     query = convert_numeric_truthiness(query)
