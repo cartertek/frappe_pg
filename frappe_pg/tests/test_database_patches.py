@@ -35,6 +35,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_hrms_skill_assessment_group_order,
     normalize_hrms_staffing_plan_aggregate,
     normalize_payment_request_single_match_grouping,
+    qualify_frappe_grouped_order_aggregate,
     remove_erpnext_inventory_dimension_default_order,
     remove_index_hints,
     remove_order_by_from_aggregate_only_query,
@@ -218,6 +219,22 @@ class TestQueryTransformers(unittest.TestCase):
     def test_unrelated_grouped_query_is_not_touched_by_bom_normalizer(self):
         query = 'SELECT item_code, idx FROM "tabOther" GROUP BY item_code ORDER BY idx'
         self.assertEqual(normalize_erpnext_v15_bom_group_query(query), query)
+
+    def test_grouped_order_aggregate_restores_preserved_table_qualifier(self):
+        query = (
+            'SELECT "tabPurchase Receipt Item"."purchase_receipt_item",'
+            'SUM(ABS("tabPurchase Receipt Item"."qty")) AS "qty",'
+            'MAX("modified") AS "tabPurchase Receipt.modified" '
+            'FROM "tabPurchase Receipt" JOIN "tabPurchase Receipt Item" ON 1=1 '
+            'GROUP BY "tabPurchase Receipt Item"."purchase_receipt_item" '
+            'ORDER BY "tabPurchase Receipt.modified" DESC'
+        )
+        transformed = qualify_frappe_grouped_order_aggregate(query)
+        self.assertIn('MAX("tabPurchase Receipt"."modified") AS "tabPurchase Receipt.modified"', transformed)
+
+    def test_unaliased_max_modified_is_unchanged(self):
+        query = 'SELECT MAX("modified") FROM "tabPurchase Receipt" GROUP BY "supplier"'
+        self.assertEqual(qualify_frappe_grouped_order_aggregate(query), query)
 
     def test_erpnext_inventory_dimension_distinct_drops_only_implicit_modified_order(self):
         query = (
