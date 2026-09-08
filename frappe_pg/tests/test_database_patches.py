@@ -15,6 +15,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_update_join,
     convert_numeric_truthiness,
     expand_mysql_having_alias,
+    remove_erpnext_inventory_dimension_default_order,
     remove_index_hints,
 )
 
@@ -105,6 +106,26 @@ class TestQueryTransformers(unittest.TestCase):
     def test_mysql_having_unknown_alias_is_unchanged(self):
         query = "SELECT count(*) AS total FROM tabThing HAVING other_alias > 0"
         self.assertEqual(expand_mysql_having_alias(query), query)
+
+    def test_erpnext_inventory_dimension_distinct_drops_only_implicit_modified_order(self):
+        query = (
+            'select distinct target_fieldname as fieldname, "source_fieldname", '
+            '"reference_document" as doctype, "validate_negative_stock" '
+            'from "tabInventory Dimension" order by "tabInventory Dimension"."modified" DESC'
+        )
+        expected = (
+            'select distinct target_fieldname as fieldname, "source_fieldname", '
+            '"reference_document" as doctype, "validate_negative_stock" '
+            'from "tabInventory Dimension"'
+        )
+        self.assertEqual(remove_erpnext_inventory_dimension_default_order(query), expected)
+
+    def test_other_distinct_ordering_is_unchanged(self):
+        query = (
+            'select distinct "name" from "tabInventory Dimension" '
+            'order by "tabInventory Dimension"."modified" DESC'
+        )
+        self.assertEqual(remove_erpnext_inventory_dimension_default_order(query), query)
 
     def test_numeric_truthiness_from_hrms_employee_advance_patch(self):
         query = (
