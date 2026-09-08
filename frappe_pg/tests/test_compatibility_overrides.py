@@ -1,3 +1,4 @@
+import sys
 import types
 import unittest
 from unittest.mock import Mock, patch
@@ -142,21 +143,31 @@ class TestSchemaTypeConversionCompatibility(unittest.TestCase):
         class CastFailure(Exception):
             pgcode = "22P02"
 
+        class ValidationError(Exception):
+            pass
+
         def old_alter(self):
             raise CastFailure()
 
+        def throw(message, title=None):
+            raise ValidationError(message)
+
+        fake_frappe = types.ModuleType("frappe")
+        fake_frappe.ValidationError = ValidationError
+        fake_frappe.throw = throw
+        fake_frappe._ = lambda value: value
         table = types.SimpleNamespace(alter=old_alter)
         schema = types.SimpleNamespace(doctype="Example")
         with (
             patch.object(schema_type_conversion, "_load_postgres_table", return_value=table),
-            patch("frappe.throw", side_effect=__import__("frappe").ValidationError("incompatible")),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
         ):
             self.assertTrue(schema_type_conversion.is_needed())
             self.assertTrue(schema_type_conversion.apply())
             installed = table.alter
             self.assertFalse(schema_type_conversion.apply())
             self.assertIs(table.alter, installed)
-            with self.assertRaises(__import__("frappe").ValidationError):
+            with self.assertRaises(ValidationError):
                 installed(schema)
             self.assertTrue(schema_type_conversion.remove())
             self.assertIs(table.alter, old_alter)
@@ -198,11 +209,12 @@ class TestUniqueInsertTransactionCompatibility(unittest.TestCase):
         self.assertTrue(unique_insert_transaction._upstream_isolates_insert_failures(isolated_insert))
 
     def test_unique_postgres_insert_uses_savepoint_and_restores(self):
-        import frappe
-
         from frappe_pg.compat.frappe import unique_insert_transaction
 
-        failure = frappe.UniqueValidationError("duplicate")
+        class UniqueValidationError(Exception):
+            pass
+
+        failure = UniqueValidationError("duplicate")
 
         def old_insert(self, *args, **kwargs):
             raise failure
@@ -211,14 +223,16 @@ class TestUniqueInsertTransactionCompatibility(unittest.TestCase):
         field = types.SimpleNamespace(unique=True)
         doc = types.SimpleNamespace(meta=types.SimpleNamespace(fields=[field]))
         fake_db = Mock(db_type="postgres")
+        fake_frappe = types.ModuleType("frappe")
+        fake_frappe.db = fake_db
         with (
             patch.object(unique_insert_transaction, "_load_base_document", return_value=document),
-            patch.object(frappe, "db", fake_db),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
         ):
             self.assertTrue(unique_insert_transaction.apply())
             installed = document.db_insert
             self.assertFalse(unique_insert_transaction.apply())
-            with self.assertRaises(frappe.UniqueValidationError):
+            with self.assertRaises(UniqueValidationError):
                 installed(doc)
             fake_db.savepoint.assert_called_once()
             fake_db.rollback.assert_called_once()
@@ -227,8 +241,6 @@ class TestUniqueInsertTransactionCompatibility(unittest.TestCase):
             self.assertIs(document.db_insert, old_insert)
 
     def test_ordinary_or_non_postgres_insert_has_no_savepoint(self):
-        import frappe
-
         from frappe_pg.compat.frappe import unique_insert_transaction
 
         def old_insert(self, *args, **kwargs):
@@ -241,11 +253,13 @@ class TestUniqueInsertTransactionCompatibility(unittest.TestCase):
                     meta=types.SimpleNamespace(fields=[types.SimpleNamespace(unique=unique)])
                 )
                 fake_db = Mock(db_type=db_type)
+                fake_frappe = types.ModuleType("frappe")
+                fake_frappe.db = fake_db
                 unique_insert_transaction._original_db_insert = None
                 unique_insert_transaction._patched_db_insert = None
                 with (
                     patch.object(unique_insert_transaction, "_load_base_document", return_value=document),
-                    patch.object(frappe, "db", fake_db),
+                    patch.dict(sys.modules, {"frappe": fake_frappe}),
                 ):
                     self.assertTrue(unique_insert_transaction.apply())
                     self.assertEqual(document.db_insert(doc), "ok")
