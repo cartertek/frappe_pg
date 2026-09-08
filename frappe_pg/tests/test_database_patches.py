@@ -666,10 +666,8 @@ class TestQueryTransformers(unittest.TestCase):
             transformed,
         )
         self.assertIn('ORDER BY MIN(bom_item.idx)', transformed)
-        self.assertIn(
-            'JOIN "tabItem" item ON item.name = bom_item.item_code GROUP BY',
-            transformed,
-        )
+        self.assertIn('JOIN "tabItem" item ON item.name = bom_item.item_code', transformed)
+        self.assertIn('where bom_item.docstatus < 2 GROUP BY', transformed)
         self.assertNotIn('ONGROUP', transformed)
 
     def test_double_quoted_literal_after_legacy_qualified_field(self):
