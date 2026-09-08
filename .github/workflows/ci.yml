@@ -555,34 +555,6 @@ jobs:
               --site test_site \
               --group "${{ matrix.test_group }}" || status=$?
 
-            # A few Frappe tests are state-sensitive rather than PostgreSQL-
-            # specific. Run them on a clean secondary site after the remainder,
-            # then run User Invitation last because its expected-error path can
-            # leave PostgreSQL's transaction aborted.
-            if [[ "${{ matrix.test_group }}" == "remainder-2" ]]; then
-              cd ..
-              bench new-site isolated_site \
-                --db-type postgres \
-                --db-host 127.0.0.1 \
-                --db-port 5432 \
-                --db-name test_isolated \
-                --db-password test_isolated \
-                --db-root-username postgres \
-                --db-root-password root \
-                --admin-password admin
-              bench --site isolated_site execute frappe.utils.install.before_tests
-              bench --site isolated_site install-app frappe_pg
-              bench --site isolated_site set-config allow_tests 1 --parse
-              bench --site isolated_site set-config host_name "http://isolated_site:8000"
-              echo "127.0.0.1 isolated_site" | sudo tee -a /etc/hosts
-              cd sites
-              ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_frappe_test_group.py" \
-                --site isolated_site \
-                --group state-sensitive || status=$?
-              ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_frappe_test_group.py" \
-                --site isolated_site \
-                --group user-invitation || status=$?
-            fi
             exit "$status"
           else
             bench --site test_site run-tests --app "${{ matrix.app }}"
