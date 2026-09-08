@@ -714,7 +714,7 @@ def normalize_payment_request_single_match_grouping(query):
     equivalent for the only rows that survive the outer ``count = 1`` filter.
     """
     required = (
-        r'\bFROM\s+"tabPayment Request"\b',
+        r'\bFROM\s+"tabPayment Request"',
         r'COUNT\s*\(\s*\*\s*\)\s+(?:AS\s+)?"count"',
         r'GROUP\s+BY\s+"reference_doctype"\s*,\s*"reference_name"\s*,\s*"outstanding_amount"',
         r'WHERE\s+"sq0"\."count"\s*=\s*[\'"]?1[\'"]?',
@@ -778,7 +778,7 @@ def normalize_hrms_shift_assignment_empty_end_date(query):
     predicates, where the application already treats NULL and empty as the same
     open-ended value.
     """
-    if not re.search(r'\bFROM\s+"tabShift Assignment"\b', query, re.IGNORECASE):
+    if not re.search(r'\bFROM\s+"tabShift Assignment"', query, re.IGNORECASE):
         return query
     pattern = re.compile(
         r'(?P<field>(?:"tabShift Assignment"\.)?"end_date")\s*=\s*\'\'',
@@ -790,7 +790,7 @@ def normalize_hrms_shift_assignment_empty_end_date(query):
 def normalize_hrms_skill_assessment_group_order(query):
     """Aggregate HRMS Skill Assessment idx when ordering a grouped rating query."""
     required = (
-        r'\bFROM\s+"tabSkill Assessment"\b',
+        r'\bFROM\s+"tabSkill Assessment"',
         r'AVG\s*\(\s*"tabSkill Assessment"\."rating"\s*\)',
         r'GROUP\s+BY\s+"tabSkill Assessment"\."skill"',
         r'ORDER\s+BY\s+"tabSkill Assessment"\."idx"',
@@ -801,6 +801,71 @@ def normalize_hrms_skill_assessment_group_order(query):
         r'ORDER\s+BY\s+("tabSkill Assessment"\."idx")',
         r'ORDER BY MIN(\1)',
         query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_erpnext_production_plan_subitems_grouping(query):
+    """Make ERPNext's grouped Production Plan sub-item query PostgreSQL-valid.
+
+    ERPNext v16 groups BOM Item rows by ``item_code`` while selecting item,
+    BOM, warehouse, UOM, and BOM-line attributes that MariaDB permits outside
+    the GROUP BY. ERPNext develop now aggregates those dependent values, uses
+    MIN for ``is_phantom_item``, and orders by MIN(idx). Apply the same
+    semantics only to the recognizable Production Plan BOM Item query shape.
+    """
+    required = (
+        r'\bFROM\s+"tabBOM Item"',
+        r'\bJOIN\s+"tabBOM"',
+        r'\bJOIN\s+"tabItem"',
+        r'\bGROUP\s+BY\s+"tabBOM Item"\."item_code"',
+        r'SUM\s*\(.*"tabBOM Item"\."stock_qty"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE | re.DOTALL) for pattern in required):
+        return query
+
+    select_match = re.search(r"\bSELECT\b", query, re.IGNORECASE)
+    if not select_match:
+        return query
+    from_start = _find_top_level_keyword(query, "FROM", select_match.end())
+    if from_start is None:
+        return query
+
+    field_pattern = re.compile(
+        r'^(?P<field>"(?P<table>tab(?:BOM Item|BOM|Item|Item Default|UOM Conversion Detail))"\.'
+        r'"(?P<column>[^"]+)")'
+        r'(?P<alias>\s+(?:AS\s+)?"[^"]+")?$',
+        re.IGNORECASE,
+    )
+    grouped_field = '"tabBOM Item"."item_code"'
+    transformed_items = []
+    changed = False
+    for item in split_by_comma(query[select_match.end() : from_start]):
+        stripped = item.strip()
+        match = field_pattern.match(stripped)
+        if not match or match.group("field").lower() == grouped_field.lower():
+            transformed_items.append(stripped)
+            continue
+
+        column = match.group("column")
+        aggregate = (
+            "MIN"
+            if (match.group("table").lower() == "tabbom item" and column.lower() == "is_phantom_item")
+            else "MAX"
+        )
+        alias = match.group("alias") or f' AS "{column}"'
+        transformed_items.append(f'{aggregate}({match.group("field")}){alias}')
+        changed = True
+
+    if not changed:
+        return query
+
+    rebuilt = query[: select_match.end()] + " " + ", ".join(transformed_items) + " " + query[from_start:]
+    return re.sub(
+        r'\bORDER\s+BY\s+"tabBOM Item"\."idx"(?P<direction>\s+(?:ASC|DESC))?',
+        lambda match: f'ORDER BY MIN("tabBOM Item"."idx"){match.group("direction") or ""}',
+        rebuilt,
         count=1,
         flags=re.IGNORECASE,
     )
@@ -918,6 +983,7 @@ def apply_all_query_transformations(query):
     query = convert_mysql_inner_join_without_condition(query)
     query = normalize_hrms_shift_assignment_empty_end_date(query)
     query = normalize_hrms_skill_assessment_group_order(query)
+    query = normalize_erpnext_production_plan_subitems_grouping(query)
     query = normalize_erpnext_landed_cost_center_aggregate(query)
     query = convert_mysql_update_join(query)
 
