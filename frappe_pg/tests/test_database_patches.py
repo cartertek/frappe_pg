@@ -21,6 +21,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_numeric_truthiness,
     expand_mysql_having_alias,
     normalize_erpnext_item_end_of_life_zero_date,
+    normalize_erpnext_landed_cost_center_aggregate,
     normalize_erpnext_v15_bom_group_query,
     normalize_hrms_shift_assignment_empty_end_date,
     normalize_hrms_skill_assessment_group_order,
@@ -306,6 +307,17 @@ class TestQueryTransformers(unittest.TestCase):
         query = 'SELECT * FROM "tabX" WHERE "tabX"."a" AND "tabX"."b"'
         expected = 'SELECT * FROM "tabX" WHERE ("tabX"."a" <> 0) AND ("tabX"."b" <> 0)'
         self.assertEqual(convert_numeric_truthiness(query), expected)
+
+    def test_erpnext_landed_cost_center_is_aggregated(self):
+        query = """select sum(applicable_charges), cost_center
+            from "tabLanded Cost Item"
+            where docstatus = '1' and purchase_receipt_item = 'item'"""
+        transformed = normalize_erpnext_landed_cost_center_aggregate(query)
+        self.assertIn('sum(applicable_charges), MAX(cost_center)', transformed)
+
+    def test_unrelated_aggregate_projection_is_unchanged(self):
+        query = 'select sum(amount), cost_center from "tabGL Entry"'
+        self.assertEqual(normalize_erpnext_landed_cost_center_aggregate(query), query)
 
     def test_payment_request_single_match_name_is_aggregated(self):
         query = """SELECT "sq0"."payment_request" FROM (
