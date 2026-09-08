@@ -810,6 +810,12 @@ def convert_mysql_double_quoted_literals(query):
         return f'{match.group("operator")}{match.group("space")}\'{value}\''
 
     def replace_bare_field(match):
+        # Raw MySQL SQL often uses backticks around a self-reference on the RHS
+        # (``paid_amount = `paid_amount` + x``). Frappe's PostgreSQL modifier
+        # converts those backticks to double quotes before this hook runs; keep
+        # a same-name RHS as an identifier, not a string literal.
+        if match.group("field").rsplit(".", 1)[-1].lower() == match.group("value").lower():
+            return match.group(0)
         value = match.group("value").replace("'", "''")
         return (
             f'{match.group("field")}{match.group("before")}{match.group("operator")}'
@@ -1231,6 +1237,111 @@ def normalize_erpnext_mode_of_payment_grouping(query):
     )
 
 
+def normalize_erpnext_budget_requested_amount(query):
+    """Backport ERPNext's PostgreSQL-safe requested-budget aggregate.
+
+    Older branches render ``SUM(stock_qty - ordered_qty) * rate``. PostgreSQL
+    rejects the unaggregated ``rate`` and the expression is semantically wrong
+    if grouped rows have different rates. ERPNext develop moved the rate inside
+    SUM and NULL-protected it. Restrict this to Material Request Item queries.
+    """
+    if not re.search(r'\bFROM\s+"tabMaterial Request"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bJOIN\s+"tabMaterial Request Item"', query, re.IGNORECASE):
+        return query
+    pattern = re.compile(
+        r'(?P<sum>SUM\s*\(\s*(?P<diff>'
+        r'COALESCE\s*\(\s*"tabMaterial Request Item"\."stock_qty"\s*,\s*0\s*\)\s*'
+        r'-\s*COALESCE\s*\(\s*"tabMaterial Request Item"\."ordered_qty"\s*,\s*0\s*\)'
+        r')\s*\))\s*\*\s*(?P<rate>"tabMaterial Request Item"\."rate")',
+        re.IGNORECASE,
+    )
+    return pattern.sub(
+        lambda match: f'SUM(({match.group("diff")}) * COALESCE({match.group("rate")},0))',
+        query,
+        count=1,
+    )
+
+
+def normalize_erpnext_batch_availability_grouping(query):
+    """Match ERPNext develop's grouped batch availability query on PostgreSQL."""
+    required = (
+        r'\bFROM\s+"tabStock Ledger Entry"',
+        r'\bJOIN\s+"tabSerial and Batch Entry"',
+        r'\bJOIN\s+"tabBatch"',
+        r'\bGROUP\s+BY\s+"tabSerial and Batch Entry"\."batch_no"\s*,\s*'
+        r'"tabSerial and Batch Entry"\."warehouse"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    query = re.sub(
+        r'(?<![A-Za-z0-9_])"tabBatch"\."expiry_date"(?=\s*(?:,|FROM\b))',
+        'MAX("tabBatch"."expiry_date") AS "expiry_date"',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    for field in ("creation", "expiry_date"):
+        query = re.sub(
+            rf'(?P<prefix>\bORDER\s+BY\s+)"tabBatch"\."{field}"',
+            rf'\g<prefix>MAX("tabBatch"."{field}")',
+            query,
+            flags=re.IGNORECASE,
+        )
+    return query
+
+
+def normalize_erpnext_unreconcile_payment_grouping(query):
+    """Aggregate dependent Payment Ledger fields in unreconciliation queries.
+
+    ERPNext develop wraps these per-group scalar values in MAX() while keeping
+    the reference key as the GROUP BY column. Apply that exact semantics only
+    to the Payment Ledger allocation query shape.
+    """
+    if not re.search(r'\bFROM\s+"tabPayment Ledger Entry"', query, re.IGNORECASE):
+        return query
+    if not re.search(
+        r'ABS\s*\(\s*SUM\s*\(\s*"tabPayment Ledger Entry"\."amount_in_account_currency"\s*\)\s*\)',
+        query,
+        re.IGNORECASE,
+    ):
+        return query
+    group_match = re.search(
+        r'\bGROUP\s+BY\s+(?P<group>.+?)(?=\s+HAVING\b|\s+ORDER\s+BY\b|\s*$)', query, re.IGNORECASE
+    )
+    if not group_match:
+        return query
+    grouped = {part.strip().replace('"', '').lower() for part in group_match.group("group").split(",")}
+    fields = (
+        "company",
+        "account",
+        "party_type",
+        "party",
+        "voucher_type",
+        "voucher_no",
+        "against_voucher_type",
+        "against_voucher_no",
+        "account_currency",
+    )
+    for field in fields:
+        canonical = f"tabpayment ledger entry.{field}"
+        if canonical in grouped or field in grouped:
+            continue
+        projection = re.compile(
+            rf'(?<![A-Za-z0-9_])(?P<expr>"tabPayment Ledger Entry"\."{field}")'
+            rf'(?P<alias>\s+(?:AS\s+)?"?[A-Za-z_][A-Za-z0-9_]*"?)?'
+            rf'(?=\s*,|\s+FROM\b)',
+            re.IGNORECASE,
+        )
+
+        def replace_projection(match, field=field):
+            alias = match.group("alias") or f' AS "{field}"'
+            return f'MAX({match.group("expr")}){alias}'
+
+        query = projection.sub(replace_projection, query, count=1)
+    return query
+
+
 def convert_mysql_update_join(query):
     """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
 
@@ -1331,6 +1442,9 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_repost_item_grouping(query)
     query = normalize_erpnext_mode_of_payment_grouping(query)
     query = normalize_erpnext_landed_cost_center_aggregate(query)
+    query = normalize_erpnext_budget_requested_amount(query)
+    query = normalize_erpnext_batch_availability_grouping(query)
+    query = normalize_erpnext_unreconcile_payment_grouping(query)
     query = convert_mysql_update_join(query)
 
     # Debug: Log if IF() is still present after transformation
