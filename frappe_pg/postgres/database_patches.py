@@ -23,9 +23,32 @@ _patches_applied = False
 _JSON_TYPE_OIDS = {114, 3802}
 
 
+def _normalize_zero_timestamp_params(query, values):
+    """Normalize MySQL zero-date pagination values for Frappe timestamp metadata fields."""
+    if not isinstance(values, dict):
+        return values
+
+    params = set(
+        re.findall(
+            r'"(?:creation|modified)"\s*>?=\s*%\((?P<param>[A-Za-z0-9_]+)\)s',
+            query,
+            re.IGNORECASE,
+        )
+    )
+    changed = [name for name in params if values.get(name) in {0, 0.0, "0", "0.0"}]
+    if not changed:
+        return values
+
+    normalized = values.copy()
+    for name in changed:
+        normalized[name] = "0001-01-01 00:00:00"
+    return normalized
+
+
 def patched_transform_query(self, query, values):
     """Apply frappe_pg SQL rewrites while preserving Frappe's values contract."""
     query, values = _original_transform_query(self, query, values)
+    values = _normalize_zero_timestamp_params(query, values)
     return apply_all_query_transformations(query), values
 
 

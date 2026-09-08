@@ -289,6 +289,20 @@ def convert_mysql_date_arithmetic(query):
     return re.sub(r"\bCURDATE\(\)", "CURRENT_DATE", query, flags=re.IGNORECASE)
 
 
+def convert_mysql_zero_date_sentinel(query):
+    """Replace MySQL's zero-date lower bound when the SQL is explicitly date-shaped.
+
+    MariaDB accepts ``0`` as a date lower bound. PostgreSQL does not. Restrict
+    the rewrite to COALESCE expressions whose fallback is already an ISO-like
+    date/datetime literal, which establishes the comparison as date-valued.
+    """
+    pattern = re.compile(
+        r"(?P<expr>COALESCE\([^,]+,\s*'\d{4}-\d{2}-\d{2}(?: [^']*)?'\))" r"(?P<space>\s*>=\s*)'0(?:\.0+)?'",
+        re.IGNORECASE,
+    )
+    return pattern.sub(r"\g<expr>\g<space>'0001-01-01 00:00:00'", query)
+
+
 def expand_mysql_having_alias(query):
     """Expand a simple SELECT alias referenced directly by HAVING.
 
@@ -532,12 +546,13 @@ def apply_all_query_transformations(query):
     3. Convert IFNULL to COALESCE (simple replacement)
     4. Convert DATE_FORMAT to TO_CHAR (simple replacement)
     5. Convert MySQL current-date arithmetic
-    6. Expand simple MySQL HAVING aliases
-    7. Remove irrelevant ORDER BY from aggregate-only single-row queries
-    8. Remove ERPNext inventory-dimension implicit ordering under DISTINCT
-    9. Convert MySQL numeric truthiness in boolean predicates
-    10. Convert unambiguous double-quoted string literals
-    11. Convert simple MySQL UPDATE ... JOIN statements
+    6. Normalize explicit MySQL zero-date sentinels
+    7. Expand simple MySQL HAVING aliases
+    8. Remove irrelevant ORDER BY from aggregate-only single-row queries
+    9. Remove ERPNext inventory-dimension implicit ordering under DISTINCT
+    10. Convert MySQL numeric truthiness in boolean predicates
+    11. Convert unambiguous double-quoted string literals
+    12. Convert simple MySQL UPDATE ... JOIN statements
 
     Args:
         query: SQL query string
@@ -560,6 +575,7 @@ def apply_all_query_transformations(query):
     query = convert_ifnull_to_coalesce(query)
     query = convert_date_format(query)
     query = convert_mysql_date_arithmetic(query)
+    query = convert_mysql_zero_date_sentinel(query)
     query = expand_mysql_having_alias(query)
     query = remove_order_by_from_aggregate_only_query(query)
     query = remove_erpnext_inventory_dimension_default_order(query)
