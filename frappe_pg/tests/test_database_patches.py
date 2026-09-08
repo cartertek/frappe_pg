@@ -1,6 +1,7 @@
 import inspect
 import unittest
 
+import frappe
 from frappe.database.postgres.database import PostgresDatabase, modify_query
 from frappe.database.utils import EmptyQueryValues
 
@@ -347,6 +348,32 @@ class TestTransformQueryHook(unittest.TestCase):
 
         result = ((["a", "b"],),)
         self.assertIs(database_patches._serialize_json_cells(result, [Column()]), result)
+
+    def test_postgres_schema_cast_failure_maps_to_validation_error(self):
+        class CastFailure(Exception):
+            pgcode = "22P02"
+
+        original = database_patches._original_schema_alter
+        schema = type("Schema", (), {"doctype": "Example"})()
+        try:
+            database_patches._original_schema_alter = lambda _self: (_ for _ in ()).throw(CastFailure())
+            with self.assertRaises(frappe.ValidationError):
+                database_patches.patched_schema_alter(schema)
+        finally:
+            database_patches._original_schema_alter = original
+
+    def test_postgres_schema_unrelated_error_is_preserved(self):
+        class OtherFailure(Exception):
+            pgcode = "99999"
+
+        original = database_patches._original_schema_alter
+        schema = type("Schema", (), {"doctype": "Example"})()
+        try:
+            database_patches._original_schema_alter = lambda _self: (_ for _ in ()).throw(OtherFailure())
+            with self.assertRaises(OtherFailure):
+                database_patches.patched_schema_alter(schema)
+        finally:
+            database_patches._original_schema_alter = original
 
     def test_postgres_serialization_failure_is_classified_as_deadlock(self):
         class SerializationFailure(Exception):
