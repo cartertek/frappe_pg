@@ -1463,6 +1463,47 @@ def normalize_erpnext_unreconcile_payment_grouping(query):
     return query
 
 
+def normalize_erpnext_reserved_warehouse_distinct(query):
+    """Backport ERPNext's PostgreSQL-safe reserved-warehouse ordering.
+
+    Older ERPNext selects DISTINCT warehouse and orders by the unselected
+    creation timestamp. Develop uses GROUP BY warehouse + MIN(creation), which
+    preserves distinct warehouses ordered by their earliest reservation.
+    """
+    required = (
+        r'\bSELECT\s+DISTINCT\s+"tabStock Reservation Entry"\."warehouse"',
+        r'\bFROM\s+"tabStock Reservation Entry"',
+        r'\bORDER\s+BY\s+"tabStock Reservation Entry"\."creation"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    query = re.sub(
+        r'\bSELECT\s+DISTINCT\s+("tabStock Reservation Entry"\."warehouse")',
+        r'SELECT \1',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    order_match = re.search(
+        r'\bORDER\s+BY\s+"tabStock Reservation Entry"\."creation"(?P<direction>\s+(?:ASC|DESC))?',
+        query,
+        re.IGNORECASE,
+    )
+    if not order_match:
+        return query
+    group = ' GROUP BY "tabStock Reservation Entry"."warehouse" '
+    query = query[: order_match.start()] + group + query[order_match.start() :]
+    return re.sub(
+        r'\bORDER\s+BY\s+"tabStock Reservation Entry"\."creation"(?P<direction>\s+(?:ASC|DESC))?',
+        lambda match: (
+            'ORDER BY MIN("tabStock Reservation Entry"."creation")' + (match.group("direction") or "")
+        ),
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
 def convert_mysql_update_join(query):
     """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
 
@@ -1571,6 +1612,7 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_budget_requested_amount(query)
     query = normalize_erpnext_batch_availability_grouping(query)
     query = normalize_erpnext_unreconcile_payment_grouping(query)
+    query = normalize_erpnext_reserved_warehouse_distinct(query)
     query = convert_mysql_update_join(query)
 
     # Debug: Log if IF() is still present after transformation
