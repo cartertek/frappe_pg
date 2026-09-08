@@ -87,7 +87,7 @@ def apply():
         if aggregation.lower() not in {"sum", "avg", "count", "min", "max"}:
             frappe.throw(f"Invalid aggregation type: {aggregation}")
 
-        valid_fields = frappe.get_meta(goal_doctype).get_valid_fields()
+        valid_fields = frappe.get_meta(goal_doctype).get_valid_columns()
         if goal_field not in valid_fields:
             frappe.throw(f"Invalid goal field: {goal_field}")
         if date_col not in valid_fields:

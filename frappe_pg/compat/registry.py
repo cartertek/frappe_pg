@@ -4,6 +4,7 @@ from frappe_pg.compat.erpnext import trends_group_by
 from frappe_pg.compat.frappe import (
     goal_aggregation,
     postgres_decimal_metadata,
+    postgres_unique_violation,
     schema_type_conversion,
     unique_insert_transaction,
 )
@@ -11,6 +12,7 @@ from frappe_pg.compat.frappe import (
 _COMPATIBILITY_OVERRIDES = (
     goal_aggregation,
     postgres_decimal_metadata,
+    postgres_unique_violation,
     schema_type_conversion,
     unique_insert_transaction,
     trends_group_by,
