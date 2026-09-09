@@ -221,7 +221,7 @@ class TestUniqueInsertTransactionCompatibility(unittest.TestCase):
 
         document = types.SimpleNamespace(db_insert=old_insert)
         field = types.SimpleNamespace(unique=True)
-        doc = types.SimpleNamespace(meta=types.SimpleNamespace(fields=[field]))
+        doc = types.SimpleNamespace(meta=types.SimpleNamespace(fields=[field], autoname=None))
         fake_db = Mock(db_type="postgres")
         fake_frappe = types.ModuleType("frappe")
         fake_frappe.db = fake_db
@@ -240,6 +240,43 @@ class TestUniqueInsertTransactionCompatibility(unittest.TestCase):
             self.assertTrue(unique_insert_transaction.remove())
             self.assertIs(document.db_insert, old_insert)
 
+    def test_hash_autoname_retry_rolls_back_before_recursive_insert(self):
+        from frappe_pg.compat.frappe import unique_insert_transaction
+
+        attempts = []
+
+        def old_insert(self, *args, **kwargs):
+            attempts.append(self.name)
+            if len(attempts) == 1:
+                # Mirror Frappe's hash-collision branch: the database statement
+                # failed, Frappe clears the name and recursively retries.
+                self.name = None
+                self.db_insert()
+            return "ok"
+
+        document = types.SimpleNamespace(db_insert=old_insert)
+        fake_db = Mock(db_type="postgres")
+        fake_frappe = types.ModuleType("frappe")
+        fake_frappe.db = fake_db
+        doc = types.SimpleNamespace(
+            name="collision",
+            meta=types.SimpleNamespace(autoname="hash", fields=[]),
+        )
+
+        with (
+            patch.object(unique_insert_transaction, "_load_base_document", return_value=document),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
+        ):
+            self.assertTrue(unique_insert_transaction.apply())
+            doc.db_insert = lambda *args, **kwargs: document.db_insert(doc, *args, **kwargs)
+            self.assertEqual(document.db_insert(doc), "ok")
+
+        self.assertEqual(len(attempts), 2)
+        # The recursive retry restores the outer savepoint before creating its own.
+        fake_db.rollback.assert_called_once()
+        self.assertEqual(fake_db.savepoint.call_count, 2)
+        self.assertEqual(fake_db.release_savepoint.call_count, 2)
+
     def test_ordinary_or_non_postgres_insert_has_no_savepoint(self):
         from frappe_pg.compat.frappe import unique_insert_transaction
 
@@ -250,7 +287,7 @@ class TestUniqueInsertTransactionCompatibility(unittest.TestCase):
             with self.subTest(db_type=db_type, unique=unique):
                 document = types.SimpleNamespace(db_insert=old_insert)
                 doc = types.SimpleNamespace(
-                    meta=types.SimpleNamespace(fields=[types.SimpleNamespace(unique=unique)])
+                    meta=types.SimpleNamespace(fields=[types.SimpleNamespace(unique=unique)], autoname=None)
                 )
                 fake_db = Mock(db_type=db_type)
                 fake_frappe = types.ModuleType("frappe")
