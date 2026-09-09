@@ -37,6 +37,8 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_negative_invoice_voucher_literal,
     normalize_erpnext_production_plan_subitems_grouping,
     normalize_erpnext_repost_item_grouping,
+    normalize_erpnext_work_order_return_grouping,
+    normalize_erpnext_asset_depreciation_grouping,
     normalize_erpnext_reserved_warehouse_distinct,
     normalize_erpnext_serial_ledger_distinct_order,
     normalize_erpnext_stock_ledger_batch_grouping,
@@ -640,6 +642,34 @@ class TestQueryTransformers(unittest.TestCase):
             convert_mysql_timestamp_pair('SELECT TIMESTAMP("posting_date") FROM t'),
             'SELECT TIMESTAMP("posting_date") FROM t',
         )
+
+    def test_work_order_return_grouping_includes_original_item(self):
+        query = (
+            'SELECT "tabStock Entry Detail"."item_code","tabStock Entry Detail"."original_item",'
+            'SUM("tabStock Entry Detail"."transfer_qty") "qty" FROM "tabStock Entry" '
+            'JOIN "tabStock Entry Detail" ON "tabStock Entry Detail"."parent"="tabStock Entry"."name" '
+            'WHERE "tabStock Entry"."is_return"=1 GROUP BY "tabStock Entry Detail"."item_code"'
+        )
+        transformed = normalize_erpnext_work_order_return_grouping(query)
+        self.assertIn(
+            'GROUP BY "tabStock Entry Detail"."item_code","tabStock Entry Detail"."original_item"',
+            transformed,
+        )
+
+    def test_asset_depreciation_grouping_includes_asset_dimensions(self):
+        query = (
+            'SELECT "tabAsset Depreciation Schedule"."name","tabAsset"."name",'
+            '"tabAsset"."asset_category","tabAsset"."company",'
+            'MIN("tabDepreciation Schedule"."idx")-1,MAX("tabDepreciation Schedule"."idx") '
+            'FROM "tabAsset Depreciation Schedule" JOIN "tabAsset" ON '
+            '"tabAsset Depreciation Schedule"."asset"="tabAsset"."name" '
+            'JOIN "tabDepreciation Schedule" ON "tabAsset Depreciation Schedule"."name"='
+            '"tabDepreciation Schedule"."parent" GROUP BY "tabAsset Depreciation Schedule"."name"'
+        )
+        transformed = normalize_erpnext_asset_depreciation_grouping(query)
+        self.assertIn('"tabAsset"."name"', transformed.rsplit('GROUP BY', 1)[1])
+        self.assertIn('"tabAsset"."asset_category"', transformed.rsplit('GROUP BY', 1)[1])
+        self.assertIn('"tabAsset"."company"', transformed.rsplit('GROUP BY', 1)[1])
 
     def test_erpnext_repost_item_grouping_matches_develop(self):
         query = (
