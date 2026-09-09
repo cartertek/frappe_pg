@@ -13,6 +13,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_double_quoted_literals,
     convert_mysql_update_join,
     convert_numeric_truthiness,
+    normalize_hrms_employee_event_date_parts,
     normalize_hrms_income_tax_salary_slip_grouping,
     normalize_hrms_legacy_string_literals,
     normalize_hrms_reserved_user_alias,
@@ -146,6 +147,16 @@ WHERE eca.employee_advance=%s AND ec.approval_status="Approved" AND ec.name=eca.
         transformed = normalize_hrms_legacy_string_literals(query)
         self.assertIn('AS "total_amount"', transformed)
         self.assertNotIn("AS 'total_amount'", transformed)
+
+    def test_hrms_employee_event_date_parts_cast_today(self):
+        query = (
+            'SELECT "employee_name" FROM "tabEmployee" WHERE '
+            "DATE_PART('day', date_of_birth) = date_part('day', %(today)s) AND "
+            "DATE_PART('month', date_of_birth) = date_part('month', %(today)s) AND "
+            "DATE_PART('year', date_of_birth) < date_part('year', %(today)s)"
+        )
+        transformed = normalize_hrms_employee_event_date_parts(query)
+        self.assertEqual(transformed.count('CAST(%(today)s AS date)'), 3)
 
     def test_hrms_staffing_plan_aggregate_adds_group_by(self):
         query = """SELECT DISTINCT spd.parent, sp.from_date as from_date, sp.to_date as to_date, sp.name,
