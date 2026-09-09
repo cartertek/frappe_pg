@@ -8,12 +8,15 @@ This module applies PostgreSQL compatibility transformations at Frappe's
 tracing, execution, and error handling under Frappe's control.
 """
 
+import hashlib
 import json
 import re
+import time
 from datetime import time as datetime_time, timedelta
 
 import frappe
 from frappe.database.postgres.database import PostgresDatabase
+from frappe.exceptions import QueryTimeoutError
 
 from .db_functions import create_missing_functions
 from .query_transformers import apply_all_query_transformations
@@ -21,6 +24,8 @@ from .query_transformers import apply_all_query_transformations
 _original_transform_query = None
 _original_transform_result = None
 _original_is_deadlocked = None
+_had_transaction_advisory_lock = False
+_original_transaction_advisory_lock = None
 _patches_applied = False
 
 _JSON_TYPE_OIDS = {114, 3802}
@@ -124,6 +129,20 @@ def patched_is_deadlocked(exc):
     return getattr(exc, "pgcode", None) == "40001" or _original_is_deadlocked(exc)
 
 
+def _advisory_lock_key(key) -> int:
+    return int.from_bytes(hashlib.sha256(str(key).encode()).digest()[:8], "big", signed=True)
+
+
+def transaction_advisory_lock(self, key, *, timeout=10):
+    """Backport Frappe's PostgreSQL transaction-scoped advisory lock."""
+    lock_key = _advisory_lock_key(key)
+    deadline = time.monotonic() + timeout
+    while not self.sql("SELECT pg_try_advisory_xact_lock(%s)", (lock_key,))[0][0]:
+        if time.monotonic() >= deadline:
+            raise QueryTimeoutError(f"Could not acquire advisory lock {key!r} within {timeout}s")
+        time.sleep(0.1)
+
+
 def _replace_class_attribute(target, name, value):
     """Assign a compatibility hook without hard-coding a framework attribute assignment."""
     setattr(target, name, value)
@@ -131,7 +150,8 @@ def _replace_class_attribute(target, name, value):
 
 def apply_postgres_fixes():
     """Install the query transformation hook once per process."""
-    global _original_transform_query, _original_transform_result, _original_is_deadlocked, _patches_applied
+    global _original_transform_query, _original_transform_result, _original_is_deadlocked
+    global _had_transaction_advisory_lock, _original_transaction_advisory_lock, _patches_applied
 
     if _patches_applied:
         return
@@ -139,9 +159,13 @@ def apply_postgres_fixes():
     _original_transform_query = PostgresDatabase._transform_query
     _original_transform_result = PostgresDatabase._transform_result
     _original_is_deadlocked = PostgresDatabase.is_deadlocked
+    _had_transaction_advisory_lock = hasattr(PostgresDatabase, "transaction_advisory_lock")
+    _original_transaction_advisory_lock = getattr(PostgresDatabase, "transaction_advisory_lock", None)
     _replace_class_attribute(PostgresDatabase, "_transform_query", patched_transform_query)
     _replace_class_attribute(PostgresDatabase, "_transform_result", patched_transform_result)
     _replace_class_attribute(PostgresDatabase, "is_deadlocked", staticmethod(patched_is_deadlocked))
+    if not _had_transaction_advisory_lock:
+        _replace_class_attribute(PostgresDatabase, "transaction_advisory_lock", transaction_advisory_lock)
     _patches_applied = True
 
 
@@ -158,6 +182,8 @@ def remove_postgres_fixes():
         _replace_class_attribute(PostgresDatabase, "_transform_result", _original_transform_result)
     if PostgresDatabase.is_deadlocked == patched_is_deadlocked:
         _replace_class_attribute(PostgresDatabase, "is_deadlocked", staticmethod(_original_is_deadlocked))
+    if not _had_transaction_advisory_lock and getattr(PostgresDatabase, "transaction_advisory_lock", None) == transaction_advisory_lock:
+        delattr(PostgresDatabase, "transaction_advisory_lock")
 
     _patches_applied = False
 

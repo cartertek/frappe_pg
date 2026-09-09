@@ -17,12 +17,16 @@ from frappe_pg.postgres.query_transformers import (
     convert_if_to_case,
     convert_ifnull_to_coalesce,
     convert_mysql_date_arithmetic,
+    convert_mysql_boolean_xor,
+    convert_mysql_case_value_literals,
     convert_mysql_datediff,
+    convert_mysql_monthname,
     convert_mysql_double_quoted_literals,
     convert_erpnext_modified_timediff,
     convert_mysql_inner_join_without_condition,
     convert_mysql_limit_offset,
     convert_mysql_regexp_operator,
+    convert_mysql_show_index,
     convert_mysql_timestamp_pair,
     convert_mysql_update_join,
     convert_mysql_zero_date_sentinel,
@@ -37,11 +41,15 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_landed_cost_center_aggregate,
     normalize_erpnext_mode_of_payment_grouping,
     normalize_erpnext_negative_invoice_voucher_literal,
+    normalize_erpnext_deferred_posted_literal,
+    normalize_erpnext_future_journal_payment_grouping,
     normalize_erpnext_production_plan_subitems_grouping,
     normalize_erpnext_repost_item_grouping,
+    normalize_erpnext_repost_item_fields_grouping,
     normalize_erpnext_irs_1099_grouping,
     normalize_erpnext_work_order_return_grouping,
     normalize_erpnext_asset_depreciation_grouping,
+    normalize_erpnext_batchwise_qty_result_shape,
     normalize_erpnext_reserved_warehouse_distinct,
     normalize_erpnext_serial_ledger_distinct_order,
     normalize_erpnext_stock_ledger_batch_grouping,
@@ -1040,6 +1048,99 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
             'JOIN "c" "c1" ON "b1"."id"="c1"."id" SET "a1"."x"=1 WHERE "c1"."y"=2'
         )
         self.assertEqual(convert_mysql_update_join(query), query)
+
+    def test_mysql_case_value_literal(self):
+        query = 'SELECT CASE add_deduct_tax WHEN "Add" THEN tax_amount ELSE -tax_amount END FROM "tabTax"'
+        self.assertIn("WHEN 'Add'", convert_mysql_case_value_literals(query))
+
+    def test_future_journal_payment_grouping(self):
+        query = (
+            'SELECT "tabJournal Entry Account"."reference_name" "invoice_no",'
+            '"tabJournal Entry Account"."party","tabJournal Entry Account"."party_type",'
+            '"tabJournal Entry"."posting_date" "future_date","tabJournal Entry"."cheque_no" "future_ref",'
+            'SUM("tabJournal Entry Account"."credit_in_account_currency") "future_amount" '
+            'FROM "tabJournal Entry" JOIN "tabJournal Entry Account" '
+            'ON "tabJournal Entry Account"."parent"="tabJournal Entry"."name" '
+            'HAVING "future_amount">0'
+        )
+        transformed = normalize_erpnext_future_journal_payment_grouping(query)
+        self.assertIn('GROUP BY "tabJournal Entry"."name"', transformed)
+        self.assertIn('"tabJournal Entry Account"."reference_name"', transformed)
+
+    def test_mysql_date_sub_now_interval(self):
+        query = 'select name from "tabUser" where last_login > date_sub(now(), interval 2 day) limit 1'
+        self.assertEqual(
+            convert_mysql_date_arithmetic(query),
+            "select name from \"tabUser\" where last_login > NOW() - INTERVAL '2 day' limit 1",
+        )
+
+    def test_mysql_datediff_accepts_aggregate_operand(self):
+        query = 'SELECT DATEDIFF(CURRENT_DATE,MAX("tabSales Order"."transaction_date")) "days"'
+        transformed = convert_mysql_datediff(query)
+        self.assertNotIn('DATEDIFF', transformed.upper())
+        self.assertIn('CAST(MAX("tabSales Order"."transaction_date") AS DATE)', transformed)
+
+    def test_mysql_monthname(self):
+        self.assertEqual(
+            convert_mysql_monthname('SELECT MONTHNAME("posting_date") FROM "tabGL Entry"'),
+            "SELECT TO_CHAR(\"posting_date\", 'FMMonth') FROM \"tabGL Entry\"",
+        )
+
+    def test_mysql_show_index_for_legacy_erpnext_perf_test(self):
+        query = "SHOW INDEX FROM \"tabBin\" WHERE Column_name = 'item_code' AND Seq_in_index = '1'"
+        transformed = convert_mysql_show_index(query)
+        self.assertIn('FROM pg_index', transformed)
+        self.assertIn("t.relname='tabBin'", transformed)
+        self.assertIn("a.attname='item_code'", transformed)
+
+    def test_mysql_boolean_xor_for_balance_aggregates(self):
+        query = (
+            "SELECT SUM(\"debit\")-SUM(\"credit\")= '0' XOR "
+            "SUM(\"debit_in_account_currency\")-SUM(\"credit_in_account_currency\")= '0' \"zero_balance\" "
+            'FROM "tabGL Entry"'
+        )
+        transformed = convert_mysql_boolean_xor(query)
+        self.assertNotIn(' XOR ', transformed)
+        self.assertIn('<>', transformed)
+
+    def test_deferred_posted_marker_is_literal(self):
+        query = (
+            'SELECT "tabSales Invoice Item"."name",SUM("tabGL Entry"."debit") "debit","posted" '
+            'FROM "tabSales Invoice Item" LEFT JOIN "tabGL Entry" ON 1=1 '
+            'GROUP BY "tabSales Invoice Item"."name"'
+        )
+        transformed = normalize_erpnext_deferred_posted_literal(query)
+        self.assertIn("'posted' AS \"posted\" FROM", transformed)
+
+    def test_quoted_having_aliases_are_expanded(self):
+        query = (
+            'SELECT SUM("credit") "future_amount",SUM("debit") "balance" FROM "tabGL Entry" '
+            'HAVING "future_amount">0 AND "balance"<>0'
+        )
+        transformed = expand_mysql_having_alias(query)
+        self.assertIn('HAVING (SUM("credit"))>0', transformed)
+        self.assertIn('(SUM("debit"))<>0', transformed)
+
+    def test_repost_item_grouping_uses_earliest_fields(self):
+        query = (
+            'SELECT "item_code","warehouse","posting_date","posting_time","creation","posting_datetime" '
+            "FROM \"tabStock Ledger Entry\" WHERE \"voucher_type\"='Stock Entry' "
+            'GROUP BY "item_code","warehouse"'
+        )
+        transformed = normalize_erpnext_repost_item_fields_grouping(query)
+        for field in ("posting_date", "posting_time", "creation", "posting_datetime"):
+            self.assertIn(f'MIN("{field}") AS "{field}"', transformed)
+
+    def test_batchwise_qty_drops_postgres_order_helper_column(self):
+        query = (
+            'SELECT "batch_no",SUM("qty") AS "qty",MAX(creation) AS "creation" '
+            'FROM "tabSerial and Batch Entry" GROUP BY "batch_no" ORDER BY "creation" DESC'
+        )
+        transformed = normalize_erpnext_batchwise_qty_result_shape(query)
+        self.assertEqual(
+            transformed,
+            'SELECT "batch_no",SUM("qty") AS "qty" FROM "tabSerial and Batch Entry" GROUP BY "batch_no"',
+        )
 
     def test_pipeline_is_idempotent_for_supported_transformations(self):
         queries = [
