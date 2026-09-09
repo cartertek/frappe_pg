@@ -55,7 +55,7 @@ def is_needed():
 
 
 def _document_has_unique_fields(doc):
-    return doc.doctype in _DATABASE_UNIQUE_DOCTYPES or any(
+    return getattr(doc, "doctype", None) in _DATABASE_UNIQUE_DOCTYPES or any(
         getattr(field, "unique", False) for field in doc.meta.fields
     )
 

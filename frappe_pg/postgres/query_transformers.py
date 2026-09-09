@@ -2207,7 +2207,7 @@ def normalize_erpnext_future_journal_payment_grouping(query):
         r'\bFROM\s+"tabJournal Entry"\s+JOIN\s+"tabJournal Entry Account"',
         r'"reference_name"\s+"invoice_no"',
         r'SUM\s*\(.*?\)\s+"future_amount"',
-        r'\bHAVING\s+"future_amount"\s*>\s*0',
+        r'\bHAVING\b',
     )
     if any(not re.search(pattern, query, re.IGNORECASE | re.DOTALL) for pattern in required):
         return query
