@@ -509,11 +509,21 @@ jobs:
       - name: Restore prepared Frappe bench
         run: |
           tar -C /home/runner -xf "$RUNNER_TEMP/prepared-bench/frappe-bench.tar"
-          # The Frappe artifact includes its reusable framework test site. ERPNext
-          # builds its own application fixture from the same prepared bench.
-          rm -rf /home/runner/frappe-bench/sites/test_site
           pip install frappe-bench
 
+      - name: Restore Frappe PostgreSQL database
+        env:
+          PGPASSWORD: root
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
+          CREATE DATABASE test_frappe OWNER test_frappe;
+          SQL
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
+          apps="$(bench --site test_site list-apps)"
+          grep -qx 'frappe' <<<"$apps"
+          grep -qx 'frappe_pg' <<<"$apps"
+          bench --site test_site execute frappe.db.get_single_value --args '["System Settings", "language"]' >/dev/null
       - name: Fetch application dependencies
         working-directory: /home/runner/frappe-bench
         run: |
@@ -552,20 +562,6 @@ jobs:
           CI: 'Yes'
           PGPASSWORD: root
         run: |
-          bench set-config root_login postgres -g
-          bench set-config root_password root -g
-          bench set-config admin_password admin -g
-          bench set-config db_type postgres -g
-          bench new-site test_site \
-            --db-type postgres \
-            --db-host 127.0.0.1 \
-            --db-port 5432 \
-            --db-name test_frappe \
-            --db-password test_frappe \
-            --db-root-username postgres \
-            --db-root-password root \
-            --admin-password admin
-          bench --site test_site install-app frappe_pg
           bench --site test_site install-app payments
           bench --site test_site install-app erpnext
           bench --site test_site set-config allow_tests 1 --parse
@@ -656,11 +652,21 @@ jobs:
       - name: Restore prepared Frappe bench
         run: |
           tar -C /home/runner -xf "$RUNNER_TEMP/prepared-bench/frappe-bench.tar"
-          # The Frappe artifact includes its reusable framework test site. ERPNext
-          # builds its own application fixture from the same prepared bench.
-          rm -rf /home/runner/frappe-bench/sites/test_site
           pip install frappe-bench
 
+      - name: Restore Frappe PostgreSQL database
+        env:
+          PGPASSWORD: root
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
+          CREATE DATABASE test_frappe OWNER test_frappe;
+          SQL
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
+          apps="$(bench --site test_site list-apps)"
+          grep -qx 'frappe' <<<"$apps"
+          grep -qx 'frappe_pg' <<<"$apps"
+          bench --site test_site execute frappe.db.get_single_value --args '["System Settings", "language"]' >/dev/null
       - name: Fetch application dependencies
         working-directory: /home/runner/frappe-bench
         run: |
@@ -699,20 +705,6 @@ jobs:
           CI: 'Yes'
           PGPASSWORD: root
         run: |
-          bench set-config root_login postgres -g
-          bench set-config root_password root -g
-          bench set-config admin_password admin -g
-          bench set-config db_type postgres -g
-          bench new-site test_site \
-            --db-type postgres \
-            --db-host 127.0.0.1 \
-            --db-port 5432 \
-            --db-name test_frappe \
-            --db-password test_frappe \
-            --db-root-username postgres \
-            --db-root-password root \
-            --admin-password admin
-          bench --site test_site install-app frappe_pg
           bench --site test_site install-app payments
           bench --site test_site install-app erpnext
           bench --site test_site set-config allow_tests 1 --parse
