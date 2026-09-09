@@ -203,16 +203,7 @@ jobs:
 
   prepare-upstream-frappe-v15:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - frappe: version-15
-            label: v15
-            python: '3.10'
-            node: 18
-            artifact: frappe-bench-v15
-    name: Prepare upstream Frappe ${{ matrix.label }}
+    name: Prepare upstream Frappe v15
 
     services:
       postgres:
@@ -242,21 +233,21 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python }}
+          python-version: 3.10
 
       - name: Setup Node
         uses: actions/setup-node@v3
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 18
           check-latest: true
 
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-upstream-prep-${{ matrix.frappe }}-${{ hashFiles('**/*requirements.txt', '**/pyproject.toml', '**/setup.py', '**/setup.cfg') }}
+          key: ${{ runner.os }}-upstream-prep-version-15-${{ hashFiles('**/*requirements.txt', '**/pyproject.toml', '**/setup.py', '**/setup.cfg') }}
           restore-keys: |
-            ${{ runner.os }}-upstream-prep-${{ matrix.frappe }}-
+            ${{ runner.os }}-upstream-prep-version-15-
             ${{ runner.os }}-upstream-
             ${{ runner.os }}-pip-
 
@@ -264,7 +255,7 @@ jobs:
         run: |
           pip install frappe-bench
           bench init \
-            --frappe-branch "${{ matrix.frappe }}" \
+            --frappe-branch "version-15" \
             --skip-redis-config-generation \
             --skip-assets \
             --python "$(which python)" \
@@ -318,7 +309,7 @@ jobs:
       - name: Upload prepared bench
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: frappe-bench-v15
           path: |
             ${{ runner.temp }}/frappe-bench.tar
             ${{ runner.temp }}/test_frappe.dump
@@ -327,16 +318,7 @@ jobs:
 
   prepare-upstream-frappe-v16:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - frappe: version-16
-            label: v16
-            python: '3.14'
-            node: 24
-            artifact: frappe-bench-v16
-    name: Prepare upstream Frappe ${{ matrix.label }}
+    name: Prepare upstream Frappe v16
 
     services:
       postgres:
@@ -366,21 +348,21 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python }}
+          python-version: 3.14
 
       - name: Setup Node
         uses: actions/setup-node@v3
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 24
           check-latest: true
 
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-upstream-prep-${{ matrix.frappe }}-${{ hashFiles('**/*requirements.txt', '**/pyproject.toml', '**/setup.py', '**/setup.cfg') }}
+          key: ${{ runner.os }}-upstream-prep-version-16-${{ hashFiles('**/*requirements.txt', '**/pyproject.toml', '**/setup.py', '**/setup.cfg') }}
           restore-keys: |
-            ${{ runner.os }}-upstream-prep-${{ matrix.frappe }}-
+            ${{ runner.os }}-upstream-prep-version-16-
             ${{ runner.os }}-upstream-
             ${{ runner.os }}-pip-
 
@@ -388,7 +370,7 @@ jobs:
         run: |
           pip install frappe-bench
           bench init \
-            --frappe-branch "${{ matrix.frappe }}" \
+            --frappe-branch "version-16" \
             --skip-redis-config-generation \
             --skip-assets \
             --python "$(which python)" \
@@ -442,7 +424,7 @@ jobs:
       - name: Upload prepared bench
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: frappe-bench-v16
           path: |
             ${{ runner.temp }}/frappe-bench.tar
             ${{ runner.temp }}/test_frappe.dump
@@ -452,17 +434,7 @@ jobs:
   prepare-upstream-erpnext-v15:
     needs: prepare-upstream-frappe-v15
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - frappe: version-15
-            app_branch: version-15
-            python: '3.10'
-            node: 18
-            base_artifact: frappe-bench-v15
-            artifact: erpnext-bench-v15
-    name: Prepare upstream ERPNext / ${{ matrix.frappe }}
+    name: Prepare upstream ERPNext / version-15
 
     services:
       postgres:
@@ -492,18 +464,18 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python }}
+          python-version: 3.10
 
       - name: Setup Node
         uses: actions/setup-node@v3
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 18
           check-latest: true
 
       - name: Download prepared Frappe bench
         uses: actions/download-artifact@v4
         with:
-          name: ${{ matrix.base_artifact }}
+          name: frappe-bench-v15
           path: ${{ runner.temp }}/prepared-bench
 
       - name: Restore prepared Frappe bench
@@ -536,14 +508,9 @@ jobs:
       - name: Fetch application dependencies
         working-directory: /home/runner/frappe-bench
         run: |
-          if [[ "${{ matrix.frappe }}" == "version-15" ]]; then
-            payments_branch=version-15
-          else
-            payments_branch=develop
-          fi
-          bench get-app --branch "$payments_branch" payments https://github.com/frappe/payments.git
-          bench get-app --branch "${{ matrix.app_branch }}" erpnext https://github.com/frappe/erpnext.git
-          bench setup requirements --dev
+          bench get-app --branch version-15 payments https://github.com/frappe/payments.git
+          bench get-app --branch version-15 erpnext https://github.com/frappe/erpnext.git
+          bench setup requirements --dev payments erpnext
 
       - name: Backport upstream PostgreSQL test fixture fix
         working-directory: /home/runner/frappe-bench
@@ -594,7 +561,7 @@ jobs:
       - name: Upload reusable ERPNext fixture
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: erpnext-bench-v15
           path: |
             ${{ runner.temp }}/frappe-bench.tar
             ${{ runner.temp }}/test_frappe.dump
@@ -604,17 +571,7 @@ jobs:
   prepare-upstream-erpnext-v16:
     needs: prepare-upstream-frappe-v16
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - frappe: version-16
-            app_branch: version-16
-            python: '3.14'
-            node: 24
-            base_artifact: frappe-bench-v16
-            artifact: erpnext-bench-v16
-    name: Prepare upstream ERPNext / ${{ matrix.frappe }}
+    name: Prepare upstream ERPNext / version-16
 
     services:
       postgres:
@@ -644,18 +601,18 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python }}
+          python-version: 3.14
 
       - name: Setup Node
         uses: actions/setup-node@v3
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 24
           check-latest: true
 
       - name: Download prepared Frappe bench
         uses: actions/download-artifact@v4
         with:
-          name: ${{ matrix.base_artifact }}
+          name: frappe-bench-v16
           path: ${{ runner.temp }}/prepared-bench
 
       - name: Restore prepared Frappe bench
@@ -688,14 +645,9 @@ jobs:
       - name: Fetch application dependencies
         working-directory: /home/runner/frappe-bench
         run: |
-          if [[ "${{ matrix.frappe }}" == "version-15" ]]; then
-            payments_branch=version-15
-          else
-            payments_branch=develop
-          fi
-          bench get-app --branch "$payments_branch" payments https://github.com/frappe/payments.git
-          bench get-app --branch "${{ matrix.app_branch }}" erpnext https://github.com/frappe/erpnext.git
-          bench setup requirements --dev
+          bench get-app --branch develop payments https://github.com/frappe/payments.git
+          bench get-app --branch version-16 erpnext https://github.com/frappe/erpnext.git
+          bench setup requirements --dev payments erpnext
 
       - name: Backport upstream PostgreSQL test fixture fix
         working-directory: /home/runner/frappe-bench
@@ -746,7 +698,7 @@ jobs:
       - name: Upload reusable ERPNext fixture
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: erpnext-bench-v16
           path: |
             ${{ runner.temp }}/frappe-bench.tar
             ${{ runner.temp }}/test_frappe.dump
@@ -756,17 +708,7 @@ jobs:
   prepare-upstream-hrms-v15:
     needs: prepare-upstream-erpnext-v15
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - frappe: version-15
-            app_branch: version-15
-            python: '3.10'
-            node: 18
-            base_artifact: erpnext-bench-v15
-            artifact: hrms-bench-v15
-    name: Prepare upstream HRMS / ${{ matrix.frappe }}
+    name: Prepare upstream HRMS / version-15
 
     services:
       postgres:
@@ -795,16 +737,16 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python }}
+          python-version: 3.10
       - name: Setup Node
         uses: actions/setup-node@v3
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 18
           check-latest: true
       - name: Download reusable ERPNext fixture
         uses: actions/download-artifact@v4
         with:
-          name: ${{ matrix.base_artifact }}
+          name: erpnext-bench-v15
           path: ${{ runner.temp }}/prepared-bench
       - name: Restore reusable ERPNext fixture
         run: |
@@ -825,7 +767,7 @@ jobs:
           CI: 'Yes'
           PGPASSWORD: root
         run: |
-          bench get-app --branch "${{ matrix.app_branch }}" hrms https://github.com/frappe/hrms.git
+          bench get-app --branch "version-15" hrms https://github.com/frappe/hrms.git
           bench setup requirements --dev hrms
           bench --site test_site install-app hrms
           cd sites
@@ -837,7 +779,7 @@ jobs:
       - name: Upload reusable HRMS fixture
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: hrms-bench-v15
           path: |
             ${{ runner.temp }}/frappe-bench.tar
             ${{ runner.temp }}/test_frappe.dump
@@ -847,17 +789,7 @@ jobs:
   prepare-upstream-hrms-v16:
     needs: prepare-upstream-erpnext-v16
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - frappe: version-16
-            app_branch: version-16
-            python: '3.14'
-            node: 24
-            base_artifact: erpnext-bench-v16
-            artifact: hrms-bench-v16
-    name: Prepare upstream HRMS / ${{ matrix.frappe }}
+    name: Prepare upstream HRMS / version-16
 
     services:
       postgres:
@@ -886,16 +818,16 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python }}
+          python-version: 3.14
       - name: Setup Node
         uses: actions/setup-node@v3
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 24
           check-latest: true
       - name: Download reusable ERPNext fixture
         uses: actions/download-artifact@v4
         with:
-          name: ${{ matrix.base_artifact }}
+          name: erpnext-bench-v16
           path: ${{ runner.temp }}/prepared-bench
       - name: Restore reusable ERPNext fixture
         run: |
@@ -916,7 +848,7 @@ jobs:
           CI: 'Yes'
           PGPASSWORD: root
         run: |
-          bench get-app --branch "${{ matrix.app_branch }}" hrms https://github.com/frappe/hrms.git
+          bench get-app --branch "version-16" hrms https://github.com/frappe/hrms.git
           bench setup requirements --dev hrms
           bench --site test_site install-app hrms
           cd sites
@@ -928,7 +860,7 @@ jobs:
       - name: Upload reusable HRMS fixture
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: hrms-bench-v16
           path: |
             ${{ runner.temp }}/frappe-bench.tar
             ${{ runner.temp }}/test_frappe.dump
