@@ -37,6 +37,14 @@ except Exception:
     # ERPNext might not be installed or available yet.
     pass
 
+# Apply ERPNext future-stock-voucher PostgreSQL locking compatibility backport.
+try:
+    from frappe_pg.patches.v1.fix_erpnext_future_stock_vouchers import apply_future_stock_vouchers_patch
+    apply_future_stock_vouchers_patch()
+except Exception:
+    # ERPNext might not be installed or available yet.
+    pass
+
 # Apply ERPNext trends.py patch for GROUP BY compatibility
 try:
     from frappe_pg.patches.v1.fix_erpnext_trends import apply_trends_patch
