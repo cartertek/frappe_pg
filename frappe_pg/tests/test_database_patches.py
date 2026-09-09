@@ -1261,7 +1261,7 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         self.assertIn('CAST(NULLIF("last_login", \'\') AS timestamp) > now()', transformed)
 
     def test_batch_empty_expiry_date_is_treated_as_null(self):
-        query = '("tabBatch"."expiry_date" is NULL OR "tabBatch"."expiry_date" = ' ')'
+        query = "(\"tabBatch\".\"expiry_date\" is NULL OR \"tabBatch\".\"expiry_date\" = '')"
         transformed = normalize_erpnext_batch_empty_expiry_date(query)
         self.assertNotIn("= ''", transformed)
         self.assertIn('"tabBatch"."expiry_date" IS NULL', transformed)
@@ -1277,7 +1277,7 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         transformed = normalize_erpnext_sales_pipeline_grouping(query)
         self.assertIn(
             "TO_CHAR(expected_closing, 'FMMonth')",
-            transformed.split(' order by ')[0].lower().replace('to_char', 'TO_CHAR'),
+            transformed.split(' order by ')[0],
         )
         self.assertIn(
             "TO_CHAR(expected_closing, 'FMMonth')", transformed[transformed.lower().index('group by') :]
