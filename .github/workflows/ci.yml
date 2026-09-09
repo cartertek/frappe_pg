@@ -521,10 +521,18 @@ jobs:
           CREATE DATABASE test_frappe OWNER test_frappe;
           SQL
           PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
-          apps="$(bench --site test_site list-apps)"
-          grep -qx 'frappe' <<<"$apps"
-          grep -qx 'frappe_pg' <<<"$apps"
-          bench --site test_site execute frappe.db.get_single_value --args '["System Settings", "language"]' >/dev/null
+          cd sites
+          ../env/bin/python - <<'PYVERIFY'
+          import frappe
+
+          frappe.init(site="test_site")
+          frappe.connect()
+          apps = frappe.get_installed_apps()
+          assert "frappe" in apps, apps
+          assert "frappe_pg" in apps, apps
+          frappe.db.get_single_value("System Settings", "language")
+          print("Restored Frappe fixture verified:", ", ".join(apps))
+          PYVERIFY
       - name: Fetch application dependencies
         working-directory: /home/runner/frappe-bench
         run: |
@@ -665,10 +673,18 @@ jobs:
           CREATE DATABASE test_frappe OWNER test_frappe;
           SQL
           PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
-          apps="$(bench --site test_site list-apps)"
-          grep -qx 'frappe' <<<"$apps"
-          grep -qx 'frappe_pg' <<<"$apps"
-          bench --site test_site execute frappe.db.get_single_value --args '["System Settings", "language"]' >/dev/null
+          cd sites
+          ../env/bin/python - <<'PYVERIFY'
+          import frappe
+
+          frappe.init(site="test_site")
+          frappe.connect()
+          apps = frappe.get_installed_apps()
+          assert "frappe" in apps, apps
+          assert "frappe_pg" in apps, apps
+          frappe.db.get_single_value("System Settings", "language")
+          print("Restored Frappe fixture verified:", ", ".join(apps))
+          PYVERIFY
       - name: Fetch application dependencies
         working-directory: /home/runner/frappe-bench
         run: |
