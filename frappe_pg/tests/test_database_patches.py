@@ -1061,6 +1061,16 @@ class TestQueryTransformers(unittest.TestCase):
             'SELECT "batch_no",SUM("qty") AS "qty" FROM "tabSerial and Batch Entry" GROUP BY "batch_no"',
         )
 
+    def test_batchwise_qty_rebuilds_projection_for_unknown_order_helper_alias(self):
+        query = (
+            'SELECT "batch_no",SUM("qty") AS "qty",MAX("creation") AS "_order_by" '
+            'FROM "tabSerial and Batch Entry" GROUP BY "batch_no" ORDER BY "_order_by" DESC'
+        )
+        self.assertEqual(
+            normalize_erpnext_batchwise_qty_result_shape(query),
+            'SELECT "batch_no",SUM("qty") AS "qty" FROM "tabSerial and Batch Entry" GROUP BY "batch_no"',
+        )
+
     def test_pipeline_is_idempotent_for_supported_transformations(self):
         queries = [
             "SELECT IFNULL(IF(a > 0, a, 0), 0)",
