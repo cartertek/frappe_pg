@@ -33,13 +33,15 @@ def main():
         frappe.get_attr(fn)()
 
     if args.app == "erpnext":
-        # ERPNext's CI intentionally imports this module once to instantiate
-        # BootStrapTestData.  It normalizes/creates master test records that
-        # downstream ERPNext and HRMS tests expect.  The old lightmode runner
-        # invocation reported 0 tests because these are import side effects,
-        # not unittest cases.
-        print("Running ERPNext bootstrap test data setup")
-        frappe.get_module("erpnext.tests.bootstrap_test_data")
+        # ERPNext v16+ ships a CI-only trigger module whose import instantiates
+        # BootStrapTestData.  Older branches (including v15) do not have it and
+        # must not be forced through a module that does not exist.
+        import importlib.util
+
+        bootstrap_module = "erpnext.tests.bootstrap_test_data"
+        if importlib.util.find_spec(bootstrap_module) is not None:
+            print("Running ERPNext bootstrap test data setup")
+            frappe.get_module(bootstrap_module)
 
     test_module = frappe.get_module(f"{args.app}.tests")
     for doctype in getattr(test_module, "global_test_dependencies", ()):
