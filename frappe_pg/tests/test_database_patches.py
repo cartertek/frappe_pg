@@ -35,12 +35,12 @@ from frappe_pg.postgres.query_transformers import (
     convert_numeric_truthiness,
     expand_mysql_having_alias,
     normalize_erpnext_activation_last_login_timestamp,
-    normalize_erpnext_batch_empty_expiry_date,
     normalize_erpnext_advance_payment_currency_aggregate,
     normalize_erpnext_advance_payment_reference_grouping,
     normalize_erpnext_asset_depreciation_grouping,
     normalize_erpnext_bank_clearance_journal_query,
     normalize_erpnext_batch_availability_grouping,
+    normalize_erpnext_batch_empty_expiry_date,
     normalize_erpnext_batchwise_qty_result_shape,
     normalize_erpnext_bom_items_grouping,
     normalize_erpnext_budget_requested_amount,
@@ -57,8 +57,10 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_repost_item_fields_grouping,
     normalize_erpnext_repost_item_grouping,
     normalize_erpnext_reserved_warehouse_distinct,
+    normalize_erpnext_sales_pipeline_grouping,
     normalize_erpnext_serial_ledger_distinct_order,
     normalize_erpnext_stock_ledger_batch_grouping,
+    normalize_erpnext_stock_ledger_grouped_posting_date,
     normalize_erpnext_stock_reconciliation_item_defaults,
     normalize_erpnext_stock_voucher_group_order,
     normalize_erpnext_unreconcile_payment_grouping,
@@ -67,6 +69,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_payment_request_single_match_grouping,
     normalize_postgres_update_target_alias,
     qualify_frappe_grouped_order_aggregate,
+    remove_distinct_unselected_default_order,
     remove_erpnext_inventory_dimension_default_order,
     remove_erpnext_item_barcode_default_order,
     remove_index_hints,
@@ -1125,10 +1128,41 @@ class TestQueryTransformers(unittest.TestCase):
         self.assertIn('CAST(NULLIF("last_login", \'\') AS timestamp) > now()', transformed)
 
     def test_batch_empty_expiry_date_is_treated_as_null(self):
-        query = '("tabBatch"."expiry_date" is NULL OR "tabBatch"."expiry_date" = '')'
+        query = '("tabBatch"."expiry_date" is NULL OR "tabBatch"."expiry_date" = ' ')'
         transformed = normalize_erpnext_batch_empty_expiry_date(query)
         self.assertNotIn("= ''", transformed)
         self.assertIn('"tabBatch"."expiry_date" IS NULL', transformed)
+
+    def test_sales_pipeline_count_name_groups_display_month(self):
+        query = (
+            'select "_assign" as opportunity_owner, count(name) as count, '
+            "TO_CHAR(expected_closing, 'FMMonth') as month, "
+            'EXTRACT(MONTH FROM expected_closing) as "EXTRACT(MONTH FROM expected_closing)" '
+            'from "tabOpportunity" group by _assign,EXTRACT(MONTH FROM expected_closing) '
+            'order by "EXTRACT(MONTH FROM expected_closing)"'
+        )
+        transformed = normalize_erpnext_sales_pipeline_grouping(query)
+        self.assertIn(
+            "TO_CHAR(expected_closing, 'FMMonth')",
+            transformed.split(' order by ')[0].lower().replace('to_char', 'TO_CHAR'),
+        )
+        self.assertIn(
+            "TO_CHAR(expected_closing, 'FMMonth')", transformed[transformed.lower().index('group by') :]
+        )
+
+    def test_distinct_implicit_modified_order_is_removed(self):
+        query = 'SELECT DISTINCT "fieldname" FROM "tabDocField" ORDER BY "tabDocField"."modified" ASC'
+        self.assertEqual(
+            remove_distinct_unselected_default_order(query), 'SELECT DISTINCT "fieldname" FROM "tabDocField"'
+        )
+
+    def test_grouped_sle_posting_date_uses_max(self):
+        query = (
+            'SELECT "item_code","warehouse","batch_no","posting_date",SUM("actual_qty") "qty" '
+            'FROM "tabStock Ledger Entry" GROUP BY "voucher_no","batch_no","item_code","warehouse"'
+        )
+        transformed = normalize_erpnext_stock_ledger_grouped_posting_date(query)
+        self.assertIn('MAX("posting_date") AS "posting_date"', transformed)
 
     def test_item_barcode_distinct_drops_default_modified_order(self):
         query = (

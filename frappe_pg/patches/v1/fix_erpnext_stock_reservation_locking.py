@@ -5,8 +5,8 @@ def apply_stock_reservation_locking_patch():
     import inspect
 
     import frappe
-    from frappe.query_builder.functions import Sum
     from erpnext.stock.doctype.stock_reservation_entry import stock_reservation_entry as sre_module
+    from frappe.query_builder.functions import Sum
 
     original = sre_module.get_available_qty_to_reserve
     if getattr(original, "_frappe_pg_stock_reservation_lock", False):

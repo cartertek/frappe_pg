@@ -58,7 +58,9 @@ except Exception:
 
 # Apply ERPNext stock-reservation PostgreSQL locking compatibility backport.
 try:
-    from frappe_pg.patches.v1.fix_erpnext_stock_reservation_locking import apply_stock_reservation_locking_patch
+    from frappe_pg.patches.v1.fix_erpnext_stock_reservation_locking import (
+        apply_stock_reservation_locking_patch,
+    )
     apply_stock_reservation_locking_patch()
 except Exception:
     # ERPNext might not be installed or available yet.
