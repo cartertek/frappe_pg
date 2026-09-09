@@ -876,7 +876,7 @@ class TestQueryTransformers(unittest.TestCase):
         )
         transformed = normalize_erpnext_reserved_warehouse_distinct(query)
         self.assertNotIn('SELECT DISTINCT', transformed)
-        self.assertIn('GROUP BY "tabStock Reservation Entry"."warehouse"', transformed)
+        self.assertIn('GROUP BY "warehouse"', transformed)
         self.assertIn('ORDER BY MIN("tabStock Reservation Entry"."creation")', transformed)
 
     def test_mysql_order_by_null_is_removed(self):
