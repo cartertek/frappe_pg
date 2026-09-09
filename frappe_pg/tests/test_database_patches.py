@@ -60,6 +60,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_repost_item_fields_grouping,
     normalize_erpnext_repost_item_grouping,
     normalize_erpnext_reserved_warehouse_distinct,
+    normalize_erpnext_sales_order_analysis_grouping,
     normalize_erpnext_sales_pipeline_grouping,
     normalize_erpnext_serial_ledger_distinct_order,
     normalize_erpnext_stock_account_value_grouping,
@@ -1336,6 +1337,32 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         )
         transformed = normalize_erpnext_stock_ledger_grouped_posting_date(query)
         self.assertIn('MAX("posting_date") AS "posting_date"', transformed)
+
+    def test_having_alias_expansion_is_idempotent_with_qualified_column(self):
+        query = (
+            'SELECT "tabPayment Ledger Entry"."party",'
+            'SUM("tabPayment Ledger Entry"."amount") "amount",'
+            '"tabPayment Ledger Entry"."account" '
+            'FROM "tabPayment Ledger Entry" '
+            'GROUP BY "tabPayment Ledger Entry"."party","tabPayment Ledger Entry"."account" '
+            'HAVING "amount" < 0'
+        )
+        once = apply_all_query_transformations(query)
+        twice = apply_all_query_transformations(once)
+        self.assertEqual(once, twice)
+        self.assertIn('HAVING (SUM("tabPayment Ledger Entry"."amount")) < 0', twice)
+
+    def test_sales_order_analysis_groups_both_primary_keys(self):
+        query = (
+            'SELECT so.transaction_date as date, soi.delivery_date as delivery_date, '
+            'so.name as sales_order, so.status, so.customer, soi.item_code, SUM(sii.qty) as billed_qty '
+            'FROM "tabSales Order" so, "tabSales Order Item" soi '
+            'LEFT JOIN "tabSales Invoice Item" sii ON sii.so_detail=soi.name '
+            'WHERE soi.parent=so.name GROUP BY soi.name ORDER BY so.transaction_date ASC'
+        )
+        transformed = normalize_erpnext_sales_order_analysis_grouping(query)
+        self.assertIn('GROUP BY soi.name, so.name', transformed)
+        self.assertEqual(normalize_erpnext_sales_order_analysis_grouping(transformed), transformed)
 
     def test_mysql_quarter_is_extracted(self):
         query = 'SELECT QUARTER(expected_closing) FROM "tabOpportunity"'

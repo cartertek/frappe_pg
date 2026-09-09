@@ -464,7 +464,7 @@ def expand_mysql_having_alias(query):
     suffix = query[having_start.end() :]
     for alias, expression in sorted(aliases.items(), key=lambda item: len(item[0]), reverse=True):
         alias_ref = re.compile(
-            rf'(?<![.A-Za-z0-9_$])(?:"{re.escape(alias)}"|{re.escape(alias)})(?![A-Za-z0-9_$])',
+            rf'(?<![."A-Za-z0-9_$])(?:"{re.escape(alias)}"|{re.escape(alias)})(?!["A-Za-z0-9_$])',
             re.IGNORECASE,
         )
 
@@ -2455,6 +2455,31 @@ def normalize_erpnext_stock_account_value_grouping(query):
     return query
 
 
+def normalize_erpnext_sales_order_analysis_grouping(query):
+    """Backport Sales Order Analysis grouping by both joined primary keys.
+
+    Legacy v16 groups only by ``soi.name`` while projecting columns from both
+    Sales Order Item and Sales Order. Current ERPNext groups by ``soi.name`` and
+    ``so.name``, allowing PostgreSQL to use each table's primary-key functional
+    dependency for the remaining scalar projections.
+    """
+    required = (
+        r'\bFROM\s+"tabSales Order"\s+so\s*,\s*"tabSales Order Item"\s+soi',
+        r'\bLEFT\s+JOIN\s+"tabSales Invoice Item"\s+sii',
+        r'\bGROUP\s+BY\s+soi\.name\b',
+        r'\bso\.transaction_date\s+as\s+date\b',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE | re.DOTALL) for pattern in required):
+        return query
+    return re.sub(
+        r'\bGROUP\s+BY\s+soi\.name(?!\s*,\s*so\.name)',
+        'GROUP BY soi.name, so.name',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
 def normalize_erpnext_item_query_table_references(query):
     """Quote legacy raw-SQL tabItem references to match PostgreSQL's quoted table name."""
     if not re.search(r'\bFROM\s+"tabItem"', query, re.IGNORECASE):
@@ -2861,6 +2886,7 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_budget_child_rate(query)
     query = normalize_erpnext_grouped_for_update(query)
     query = normalize_erpnext_sales_pipeline_grouping(query)
+    query = normalize_erpnext_sales_order_analysis_grouping(query)
     query = remove_distinct_unselected_default_order(query)
     query = normalize_erpnext_stock_ledger_grouped_posting_date(query)
     query = normalize_erpnext_batch_bundle_grouping(query)
