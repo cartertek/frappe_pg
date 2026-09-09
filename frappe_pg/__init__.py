@@ -74,6 +74,14 @@ except Exception:
     # ERPNext might not be installed or available yet.
     pass
 
+# Apply ERPNext Pick List PostgreSQL grouped-locking compatibility backport.
+try:
+    from frappe_pg.patches.v1.fix_erpnext_pick_list_locking import apply_pick_list_locking_patch
+    apply_pick_list_locking_patch()
+except Exception:
+    # ERPNext might not be installed or available yet.
+    pass
+
 # Apply ERPNext trends.py patch for GROUP BY compatibility
 try:
     from frappe_pg.patches.v1.fix_erpnext_trends import apply_trends_patch

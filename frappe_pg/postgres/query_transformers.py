@@ -2709,6 +2709,7 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_production_plan_subitems_grouping(query)
     query = normalize_erpnext_production_plan_explosion_grouping(query)
     query = normalize_erpnext_bank_clearance_journal_query(query)
+    query = normalize_erpnext_future_journal_payment_grouping(query)
     query = convert_erpnext_customer_suffix_unsigned(query)
     query = normalize_erpnext_advance_payment_currency_aggregate(query)
     query = normalize_erpnext_advance_payment_reference_grouping(query)
