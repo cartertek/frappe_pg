@@ -338,6 +338,26 @@ def normalize_mysql_literal_date_time_addition(query):
     )
 
 
+def normalize_erpnext_asset_empty_disposal_date(query):
+    """Treat ERPNext's legacy empty Asset.disposal_date sentinel as NULL."""
+    return re.sub(
+        r'(?P<field>(?:"tabAsset"\.)?"?disposal_date"?)\s*=\s*\'\'',
+        r'\g<field> IS NULL',
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_mysql_strpos_case_truthiness(query):
+    """Convert MySQL-style numeric STRPOS truthiness in CASE WHEN conditions."""
+    return re.sub(
+        r'(?P<prefix>\bCASE\s+WHEN\s+)(?P<expr>strpos\s*\((?:[^()]|%\([^)]+\)s)*\))(?P<space>\s+)(?=THEN\b)',
+        r'\g<prefix>\g<expr> <> 0\g<space>',
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
 def normalize_postgres_unix_timestamp_epoch(query):
     """Match MariaDB UNIX_TIMESTAMP integer-second results for Frappe's PG mapper."""
     return re.sub(
@@ -2076,6 +2096,70 @@ def normalize_erpnext_batchwise_qty_result_shape(query):
     )
 
 
+def normalize_erpnext_party_specific_item_based_on(query):
+    """Use the active Party Specific Item field name on legacy ERPNext v15 queries."""
+    if not re.search(r'\b(?:FROM|UPDATE)\s+"tabParty Specific Item"', query, re.IGNORECASE):
+        return query
+    return re.sub(
+        r'(?<![A-Za-z0-9_])"?based_on"?(?=\s*=)',
+        '"based_on_value"',
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_erpnext_bom_stock_reports(query):
+    """Backport PostgreSQL grouping semantics for legacy BOM stock reports."""
+    if not re.search(r'\bFROM\s+"tabBOM Item"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bGROUP\s+BY\s+"tabBOM Item"\."item_code"', query, re.IGNORECASE):
+        return query
+
+    replacements = {
+        "description": "MAX",
+        "item_name": "MAX",
+        "stock_uom": "MAX",
+        "qty_consumed_per_unit": "SUM",
+    }
+    for field, aggregate in replacements.items():
+        if re.search(rf'{aggregate}\s*\(\s*"tabBOM Item"\."{field}"\s*\)', query, re.IGNORECASE):
+            continue
+        query = re.sub(
+            rf'(?<![A-Za-z0-9_.])"tabBOM Item"\."{field}"(?=\s*(?:"[^"]+"|AS\s+"[^"]+")?\s*(?:,|FROM\b))',
+            lambda m, field=field, aggregate=aggregate: f'{aggregate}("tabBOM Item"."{field}")',
+            query,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return query
+
+
+def normalize_erpnext_purchased_items_result_shape(query):
+    """Preserve Supplier Quotation's expected two-column grouped result shape."""
+    required = (
+        r'\bFROM\s+"tabPurchase Order Item"',
+        r'\bSUM\s*\(\s*"?qty"?\s*\)',
+        r'\bGROUP\s+BY\s+"?supplier_quotation_item"?',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    select_match = re.search(r'\bSELECT\b.+?\bFROM\b', query, re.IGNORECASE | re.DOTALL)
+    if not select_match:
+        return query
+    rebuilt = (
+        query[: select_match.start()]
+        + 'SELECT "supplier_quotation_item",SUM("qty") AS "qty" FROM'
+        + query[select_match.end() :]
+    )
+    return re.sub(
+        r'\s+ORDER\s+BY\s+.+?(?=(?:\s+LIMIT\s+\d+)?\s*$)',
+        '',
+        rebuilt,
+        count=1,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+
 def normalize_erpnext_pos_payment_grouping(query):
     """Aggregate the per-mode payment account like current ERPNext."""
     if not re.search(r'\bFROM\s+"tabSales Invoice Payment"', query, re.IGNORECASE):
@@ -2678,6 +2762,8 @@ def apply_all_query_transformations(query):
     query = convert_mysql_quarter(query)
     query = convert_mysql_date_arithmetic(query)
     query = normalize_mysql_literal_date_time_addition(query)
+    query = normalize_erpnext_asset_empty_disposal_date(query)
+    query = normalize_mysql_strpos_case_truthiness(query)
     query = normalize_postgres_unix_timestamp_epoch(query)
     query = normalize_erpnext_activation_last_login_timestamp(query)
     query = normalize_erpnext_batch_empty_expiry_date(query)
@@ -2723,7 +2809,10 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_landed_cost_center_aggregate(query)
     query = normalize_erpnext_budget_requested_amount(query)
     query = normalize_erpnext_batch_availability_grouping(query)
+    query = normalize_erpnext_party_specific_item_based_on(query)
+    query = normalize_erpnext_bom_stock_reports(query)
     query = normalize_erpnext_batchwise_qty_result_shape(query)
+    query = normalize_erpnext_purchased_items_result_shape(query)
     query = normalize_erpnext_stock_reconciliation_item_defaults(query)
     query = normalize_erpnext_serial_ledger_distinct_order(query)
     query = normalize_erpnext_stock_ledger_batch_grouping(query)
