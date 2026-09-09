@@ -36,6 +36,7 @@ from frappe_pg.postgres.query_transformers import (
     expand_mysql_having_alias,
     normalize_erpnext_activation_last_login_timestamp,
     normalize_erpnext_advance_payment_currency_aggregate,
+    normalize_erpnext_advance_payment_reference_grouping,
     normalize_erpnext_asset_depreciation_grouping,
     normalize_erpnext_bank_clearance_journal_query,
     normalize_erpnext_batch_availability_grouping,
@@ -45,6 +46,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_deferred_posted_literal,
     normalize_erpnext_exchange_revaluation_grouping,
     normalize_erpnext_future_journal_payment_grouping,
+    normalize_erpnext_gl_account_currency_grouping,
     normalize_erpnext_irs_1099_grouping,
     normalize_erpnext_item_end_of_life_zero_date,
     normalize_erpnext_landed_cost_center_aggregate,
@@ -69,6 +71,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_hrms_skill_assessment_group_order,
     normalize_hrms_staffing_plan_aggregate,
     normalize_payment_request_single_match_grouping,
+    normalize_postgres_update_target_alias,
     qualify_frappe_grouped_order_aggregate,
     remove_erpnext_inventory_dimension_default_order,
     remove_erpnext_item_barcode_default_order,
@@ -587,7 +590,7 @@ class TestQueryTransformers(unittest.TestCase):
         transformed = normalize_erpnext_stock_voucher_group_order(query)
         self.assertIn('SELECT "voucher_type","voucher_no" FROM', transformed)
         self.assertIn('ORDER BY MIN("posting_datetime")', transformed)
-        self.assertIn('ORDER BY MIN("creation")', transformed)
+        self.assertIn('ORDER BY MIN("posting_datetime"),MIN("creation")', transformed)
         self.assertNotIn('"posting_date","posting_time","creation" FROM', transformed)
 
     def test_other_stock_ledger_group_query_is_unchanged(self):
@@ -1084,6 +1087,39 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         self.assertIn(
             'MAX("tabShift Type"."enable_late_entry_marking") AS "enable_late_entry_marking"', transformed
         )
+
+    def test_advance_payment_reference_grouping_aggregates_dependent_fields(self):
+        query = (
+            'SELECT "company","against_voucher_type" "reference_doctype",'
+            '"against_voucher_no" "reference_name",ABS(SUM("amount")) "allocated_amount",'
+            '"currency" FROM "tabAdvance Payment Ledger Entry" '
+            'GROUP BY "against_voucher_no" HAVING ABS(SUM("amount"))>0'
+        )
+        transformed = normalize_erpnext_advance_payment_reference_grouping(query)
+        self.assertIn('MAX("company") AS "company"', transformed)
+        self.assertIn('MAX("against_voucher_type") "reference_doctype"', transformed)
+        self.assertIn('MAX("currency") AS "currency"', transformed)
+
+    def test_postgres_update_target_alias_unqualifies_set_column(self):
+        query = (
+            'UPDATE "tabAdvance Taxes and Charges" "at" '
+            'SET "at"."allocated_amount"="at"."allocated_amount"+3000.0 '
+            'WHERE "at"."name"=%(param1)s'
+        )
+        expected = (
+            'UPDATE "tabAdvance Taxes and Charges" AS "at" '
+            'SET "allocated_amount"="at"."allocated_amount"+3000.0 '
+            'WHERE "at"."name"=%(param1)s'
+        )
+        self.assertEqual(normalize_postgres_update_target_alias(query), expected)
+
+    def test_raw_gl_account_currency_is_aggregated(self):
+        query = (
+            'select account, account_currency, sum(debit) as debit, sum(credit) as credit '
+            'FROM "tabGL Entry" group by account'
+        )
+        transformed = normalize_erpnext_gl_account_currency_grouping(query)
+        self.assertIn('MAX("account_currency") AS "account_currency"', transformed)
 
     def test_simple_mysql_update_join(self):
         query = (

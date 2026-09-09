@@ -1288,6 +1288,36 @@ def normalize_erpnext_advance_payment_currency_aggregate(query):
     )
 
 
+def normalize_erpnext_advance_payment_reference_grouping(query):
+    """Aggregate fields functionally dependent on an advance reference group."""
+    if not re.search(r'\bFROM\s+"tabAdvance Payment Ledger Entry"', query, re.IGNORECASE):
+        return query
+    if not re.search(
+        r'\bGROUP\s+BY\s+(?:"tabAdvance Payment Ledger Entry"\.)?"?against_voucher_no"?', query, re.IGNORECASE
+    ):
+        return query
+    if not re.search(
+        r'ABS\s*\(\s*SUM\s*\(\s*(?:"tabAdvance Payment Ledger Entry"\.)?"?amount"?\s*\)\s*\)',
+        query,
+        re.IGNORECASE,
+    ):
+        return query
+    for field in ("company", "against_voucher_type", "currency"):
+        if re.search(
+            rf'MAX\s*\(\s*(?:"tabAdvance Payment Ledger Entry"\.)?"?{field}"?\s*\)', query, re.IGNORECASE
+        ):
+            continue
+        query = re.sub(
+            rf'(?<![A-Za-z0-9_.])(?P<expr>(?:"tabAdvance Payment Ledger Entry"\.)?"?{field}"?)'
+            rf'(?P<alias>\s+(?:AS\s+)?"?[A-Za-z_][A-Za-z0-9_]*"?)?(?=\s*,|\s+FROM\b)',
+            lambda m, field=field: f'MAX({m.group("expr")})' + (m.group("alias") or f' AS "{field}"'),
+            query,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return query
+
+
 def normalize_erpnext_repost_item_fields_grouping(query):
     """Backport the grouped repost-item projection used by ERPNext develop."""
     required = (
@@ -1352,8 +1382,8 @@ def normalize_erpnext_stock_voucher_group_order(query):
         flags=re.IGNORECASE,
     )
     query = re.sub(
-        r'(?P<comma>,\s*)(?P<field>(?:"tabStock Ledger Entry"\.)?"?creation"?)(?=\s*(?:ASC|DESC)?\s*$)',
-        lambda match: f'{match.group("comma")}MIN({match.group("field")})',
+        r'(?P<separator>,\s*|\s+ORDER\s+BY\s+)(?P<field>(?:"tabStock Ledger Entry"\.)?"?creation"?)(?=\s*(?:ASC|DESC)?\s*$)',
+        lambda match: f',MIN({match.group("field")})',
         query,
         count=1,
         flags=re.IGNORECASE,
@@ -1851,6 +1881,27 @@ def normalize_hrms_shift_attendance_grouping(query):
     return query
 
 
+def normalize_postgres_update_target_alias(query):
+    """Remove target-alias qualification from PostgreSQL UPDATE SET columns."""
+    pattern = re.compile(
+        rf'^(?P<prefix>\s*UPDATE\s+{_QUOTED_IDENTIFIER}\s+)(?P<alias>"[^"]+")'
+        r'(?P<set>\s+SET\s+)(?P<body>.+?)(?P<where>\s+WHERE\s+.+)$',
+        re.IGNORECASE | re.DOTALL,
+    )
+    match = pattern.match(query)
+    if not match:
+        return query
+    alias = match.group("alias")
+    body = re.sub(
+        r'(?P<boundary>^|,)\s*' + re.escape(alias) + r'\.(?P<column>"[^"]+")\s*=',
+        lambda m: f'{m.group("boundary")} {m.group("column") }=',
+        match.group("body"),
+    )
+    if body == match.group("body"):
+        return query
+    return f'{match.group("prefix")}AS {alias}{match.group("set")}{body}{match.group("where")}'
+
+
 def convert_mysql_update_join(query):
     """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
 
@@ -2081,7 +2132,9 @@ def normalize_erpnext_gl_account_currency_grouping(query):
         return query
     if not re.search(r'\bGROUP\s+BY\b', query, re.IGNORECASE):
         return query
-    if not re.search(r'\bSUM\s*\(\s*"(?:debit|credit)(?:_in_account_currency)?"\s*\)', query, re.IGNORECASE):
+    if not re.search(
+        r'\bSUM\s*\(\s*"?(?:debit|credit)(?:_in_account_currency)?"?\s*\)', query, re.IGNORECASE
+    ):
         return query
     if re.search(
         r'MAX\s*\(\s*"account_currency"\s*\)\s+(?:AS\s+)?"account_currency"',
@@ -2090,7 +2143,7 @@ def normalize_erpnext_gl_account_currency_grouping(query):
     ):
         return query
     return re.sub(
-        r'(?<![A-Za-z0-9_.])"account_currency"(?=\s*(?:,|FROM\b))',
+        r'(?<![A-Za-z0-9_.])"?account_currency"?(?=\s*(?:,|FROM\b))',
         'MAX("account_currency") AS "account_currency"',
         query,
         count=1,
@@ -2558,6 +2611,7 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_bank_clearance_journal_query(query)
     query = convert_erpnext_customer_suffix_unsigned(query)
     query = normalize_erpnext_advance_payment_currency_aggregate(query)
+    query = normalize_erpnext_advance_payment_reference_grouping(query)
     query = normalize_erpnext_repost_item_fields_grouping(query)
     query = normalize_erpnext_stock_voucher_group_order(query)
     query = normalize_erpnext_work_order_return_grouping(query)
@@ -2594,6 +2648,7 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_literal_timestamp_subtraction(query)
     query = normalize_erpnext_reserved_warehouse_distinct(query)
     query = convert_erpnext_modified_timediff(query)
+    query = normalize_postgres_update_target_alias(query)
     query = convert_mysql_update_join(query)
 
     # Debug: Log if IF() is still present after transformation
