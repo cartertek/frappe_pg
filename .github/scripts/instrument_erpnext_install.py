@@ -45,3 +45,37 @@ for old, new in replacements.items():
         raise SystemExit(f"ERPNext after_install call not found: {old.strip()}")
     source = source.replace(old, new, 1)
 path.write_text(source)
+
+
+# Also time the Frappe installer phases which run after ERPNext's own
+# after_install hook. These are part of `bench install-app erpnext`.
+installer = Path("apps/frappe/frappe/installer.py")
+installer_source = installer.read_text()
+installer_helper = """def _frappe_pg_timed_install_phase(label, fn):
+\timport time
+
+\tstarted = time.perf_counter()
+\ttry:
+\t\treturn fn()
+\tfinally:
+\t\tprint(f"[frappe_pg installer phase] {label}: {time.perf_counter() - started:.3f}s", flush=True)
+
+
+"""
+if "def _frappe_pg_timed_install_phase" not in installer_source:
+    installer_source = installer_source.replace(
+        "def install_app(name, verbose=False, set_as_patched=True, force=False):\n",
+        installer_helper + "def install_app(name, verbose=False, set_as_patched=True, force=False):\n",
+        1,
+    )
+    phase_replacements = {
+        "\tsync_jobs()\n": '\t_frappe_pg_timed_install_phase("sync_jobs", sync_jobs)\n',
+        "\tsync_fixtures(name)\n": '\t_frappe_pg_timed_install_phase("sync_fixtures", lambda: sync_fixtures(name))\n',
+        "\tsync_customizations(name)\n": '\t_frappe_pg_timed_install_phase("sync_customizations", lambda: sync_customizations(name))\n',
+        "\tsync_dashboards(name)\n": '\t_frappe_pg_timed_install_phase("sync_dashboards", lambda: sync_dashboards(name))\n',
+    }
+    for old, new in phase_replacements.items():
+        if old not in installer_source:
+            raise SystemExit(f"Frappe install phase not found: {old.strip()}")
+        installer_source = installer_source.replace(old, new, 1)
+    installer.write_text(installer_source)
