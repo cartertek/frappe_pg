@@ -25,6 +25,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_double_quoted_literals,
     convert_mysql_inner_join_without_condition,
     convert_mysql_limit_offset,
+    convert_mysql_month,
     convert_mysql_monthname,
     convert_mysql_regexp_operator,
     convert_mysql_show_index,
