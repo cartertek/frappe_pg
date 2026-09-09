@@ -2,8 +2,10 @@
 
 from frappe_pg.compat.erpnext import (
     batch_valuation_lock,
+    batch_valuation_advisory_lock,
     future_stock_voucher_lock,
     payment_ledger_grouping,
+    payment_terms_status,
     period_closing_fiscal_year,
     trends_group_by,
 )
@@ -27,8 +29,10 @@ _COMPATIBILITY_OVERRIDES = (
     unique_insert_transaction,
     trends_group_by,
     payment_ledger_grouping,
+    payment_terms_status,
     period_closing_fiscal_year,
     batch_valuation_lock,
+    batch_valuation_advisory_lock,
     future_stock_voucher_lock,
 )
 

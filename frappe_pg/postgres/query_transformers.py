@@ -309,7 +309,7 @@ def convert_mysql_date_arithmetic(query):
     day, week, month, and year, and the interval amount must be an integer.
     """
     date_sub = re.compile(
-        r"\bDATE_SUB\(\s*(?P<expr>[^(),]+|CURDATE\(\))\s*,\s*"
+        r"\bDATE_SUB\(\s*(?P<expr>[^(),]+|CURDATE\(\)|NOW\(\))\s*,\s*"
         r"INTERVAL\s+(?P<amount>\d+)\s+(?P<unit>DAY|WEEK|MONTH|YEAR)\s*\)",
         re.IGNORECASE,
     )
@@ -335,7 +335,8 @@ def convert_mysql_datediff(query):
     semantics even when an operand is a timestamp. Complex expressions are left
     untouched rather than parsed heuristically.
     """
-    operand = r'(?:CURRENT_DATE|CURRENT_TIMESTAMP|NOW\(\)|(?:"[^"\r\n]+"|[A-Za-z_][A-Za-z0-9_$]*)(?:\.(?:"[^"\r\n]+"|[A-Za-z_][A-Za-z0-9_$]*))?|%\([A-Za-z_][A-Za-z0-9_]*\)s)'
+    base_operand = r'(?:CURRENT_DATE|CURRENT_TIMESTAMP|NOW\(\)|(?:"[^"\r\n]+"|[A-Za-z_][A-Za-z0-9_$]*)(?:\.(?:"[^"\r\n]+"|[A-Za-z_][A-Za-z0-9_$]*))?|%\([A-Za-z_][A-Za-z0-9_]*\)s)'
+    operand = rf'(?:{base_operand}|(?:MAX|MIN)\s*\(\s*{base_operand}\s*\))'
     pattern = re.compile(
         rf'\bDATEDIFF\s*\(\s*(?P<left>{operand})\s*,\s*(?P<right>{operand})\s*\)',
         re.IGNORECASE,
@@ -385,42 +386,41 @@ def normalize_erpnext_item_end_of_life_zero_date(query):
 
 
 def expand_mysql_having_alias(query):
-    """Expand a simple SELECT alias referenced directly by HAVING.
+    """Expand SELECT aliases referenced by a MySQL-style HAVING clause.
 
-    MySQL permits ``HAVING alias > value`` while PostgreSQL requires the
-    underlying aggregate expression. This intentionally handles only a direct
-    alias predicate so more complex HAVING expressions are left untouched.
+    MariaDB accepts aliases in HAVING; PostgreSQL does not. Query Builder emits
+    aliases both as ``AS alias`` and as quoted bare aliases (``SUM(x) "total"``),
+    so collect both forms and replace alias references only inside HAVING.
     """
     select_match = re.search(r"\bSELECT\b(?P<select>.+?)\bFROM\b", query, re.IGNORECASE | re.DOTALL)
     if not select_match:
         return query
 
     aliases = {}
+    alias_pattern = re.compile(
+        r'^(?P<expr>.+?)\s+(?:AS\s+)?(?P<quote>"?)(?P<alias>[A-Za-z_][A-Za-z0-9_$]*)(?P=quote)\s*$',
+        re.IGNORECASE | re.DOTALL,
+    )
     for item in split_by_comma(select_match.group("select")):
-        alias_match = re.match(
-            r"(?P<expr>.+?)\s+AS\s+(?P<alias>[A-Za-z_][A-Za-z0-9_$]*)\s*$",
-            item.strip(),
-            re.IGNORECASE | re.DOTALL,
-        )
-        if alias_match:
-            aliases[alias_match.group("alias").lower()] = alias_match.group("expr").strip()
+        match = alias_pattern.match(item.strip())
+        if match and not re.search(r'\s(?:FROM|JOIN|WHERE|GROUP|ORDER|HAVING)\s', match.group("expr"), re.IGNORECASE):
+            aliases[match.group("alias").lower()] = match.group("expr").strip()
 
     if not aliases:
         return query
 
-    having = re.compile(
-        r"(?P<prefix>\bHAVING\s+)(?P<alias>[A-Za-z_][A-Za-z0-9_$]*)"
-        r"(?P<space>\s*)(?P<operator><>|!=|<=|>=|=|<|>)",
-        re.IGNORECASE,
-    )
-
-    def replace(match):
-        expression = aliases.get(match.group("alias").lower())
-        if expression is None:
-            return match.group(0)
-        return f'{match.group("prefix")}({expression}){match.group("space")}{match.group("operator")}'
-
-    return having.sub(replace, query, count=1)
+    having_start = re.search(r"\bHAVING\b", query, re.IGNORECASE)
+    if not having_start:
+        return query
+    suffix = query[having_start.end():]
+    for alias, expression in sorted(aliases.items(), key=lambda item: len(item[0]), reverse=True):
+        suffix = re.sub(
+            rf'(?<![.A-Za-z0-9_$])(?:"{re.escape(alias)}"|{re.escape(alias)})(?![A-Za-z0-9_$])',
+            f'({expression})',
+            suffix,
+            flags=re.IGNORECASE,
+        )
+    return query[:having_start.end()] + suffix
 
 
 def remove_order_by_from_aggregate_only_query(query):
@@ -653,6 +653,18 @@ def normalize_erpnext_bom_items_grouping(query):
                 item,
                 flags=re.IGNORECASE,
             )
+        if re.search(r"\bbom_item\.cost\s*/", item, re.IGNORECASE) and re.search(
+            r"\bbom_item\.stock_qty\b", item, re.IGNORECASE
+        ):
+            # Secondary-item groups are unique by (item_code, secondary_item_type),
+            # so aggregate each scalar before computing the legacy manual rate.
+            item = re.sub(r"\bbom_item\.cost\b", "MAX(bom_item.cost)", item, flags=re.IGNORECASE)
+            item = re.sub(
+                r"\bbom_item\.stock_qty\b",
+                "MAX(bom_item.stock_qty)",
+                item,
+                flags=re.IGNORECASE,
+            )
         transformed_items.append(item)
 
     rebuilt_select = (
@@ -853,6 +865,24 @@ def convert_mysql_double_quoted_literals(query):
     return in_list.sub(replace_in_list, query)
 
 
+
+def convert_mysql_case_value_literals(query):
+    """Quote legacy MySQL CASE value literals such as ``WHEN "Add"``.
+
+    Restrict this to the simple ``CASE <bare field> WHEN <double-quoted token>``
+    form emitted by older ERPNext reports. PostgreSQL otherwise interprets the
+    token as an identifier.
+    """
+    pattern = re.compile(
+        r'(?P<prefix>\bCASE\s+[A-Za-z_][A-Za-z0-9_$.]*\s+WHEN\s+)'
+        r'"(?P<value>[A-Za-z0-9_$@.:+/-]+)"',
+        re.IGNORECASE,
+    )
+    return pattern.sub(
+        lambda match: f"{match.group('prefix')}'{match.group('value').replace(chr(39), chr(39) * 2)}'",
+        query,
+    )
+
 def normalize_erpnext_negative_invoice_voucher_literal(query):
     """Quote ERPNext's negative-outstanding voucher type as a SQL string.
 
@@ -930,7 +960,7 @@ def convert_mysql_inner_join_without_condition(query):
     so conditioned joins are never changed.
     """
     pattern = re.compile(
-        r'\bINNER\s+JOIN\s+(?P<table>"(?:[^"]|"")+"(?:\."(?:[^"]|"")+")*)'
+        r'\b(?:INNER\s+)?JOIN\s+(?P<table>"(?:[^"]|"")+"(?:\."(?:[^"]|"")+")*)'
         r'(?P<alias>\s+(?:AS\s+)?[A-Za-z_][A-Za-z0-9_$]*)?'
         r'(?P<space>\s+)(?P<next>WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT|UNION)\b',
         re.IGNORECASE,
@@ -1113,11 +1143,22 @@ def normalize_erpnext_production_plan_subitems_grouping(query):
 def normalize_erpnext_bank_clearance_journal_query(query):
     """Match ERPNext develop's PostgreSQL-safe Journal Entry bank-clearance query.
 
+    PostgreSQL cannot represent MySQL's zero-date sentinel. Normalize that
+    sentinel before checking the narrower grouped Journal Entry shape so both
+    bank-clearance query forms receive the same NULL semantics.
+
     ERPNext v15/v16 groups Journal Entry rows by account/name while selecting
     several functionally dependent columns, and also compares a Date field with
     MySQL's ``0000-00-00`` sentinel. Develop aggregates those dependent values
     with MAX and treats the zero date as NULL on PostgreSQL.
     """
+    query = re.sub(
+        r'(?P<field>(?:"tabJournal Entry"\.)?"clearance_date")\s*=\s*\'0000-00-00\'',
+        r'\g<field> IS NULL',
+        query,
+        flags=re.IGNORECASE,
+    )
+
     required = (
         r'\bFROM\s+"tabJournal Entry Account"',
         r'\bJOIN\s+"tabJournal Entry"',
@@ -1224,6 +1265,26 @@ def normalize_erpnext_advance_payment_currency_aggregate(query):
         flags=re.IGNORECASE,
     )
 
+
+
+def normalize_erpnext_repost_item_fields_grouping(query):
+    """Backport the grouped repost-item projection used by ERPNext develop."""
+    required = (
+        r'\bFROM\s+"tabStock Ledger Entry"',
+        r'\bGROUP\s+BY\s+"?item_code"?\s*,\s*"?warehouse"?',
+        r'"?posting_date"?\s*,\s*"?posting_time"?\s*,\s*"?creation"?\s*,\s*"?posting_datetime"?',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    for field in ("posting_date", "posting_time", "creation", "posting_datetime"):
+        query = re.sub(
+            rf'(?<![A-Za-z0-9_.])"?{field}"?(?=\s*(?:,|FROM\b))',
+            f'MIN("{field}") AS "{field}"',
+            query,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return query
 
 def normalize_erpnext_stock_voucher_group_order(query):
     """Backport ERPNext's PostgreSQL-safe stock-voucher ordering query.
@@ -1585,7 +1646,7 @@ def normalize_erpnext_unreconcile_payment_grouping(query):
     if not re.search(r'\bFROM\s+"tabPayment Ledger Entry"', query, re.IGNORECASE):
         return query
     if not re.search(
-        r'ABS\s*\(\s*SUM\s*\(\s*"tabPayment Ledger Entry"\."amount_in_account_currency"\s*\)\s*\)',
+        r'ABS\s*\(\s*SUM\s*\(\s*(?:"tabPayment Ledger Entry"\.)?"amount_in_account_currency"\s*\)\s*\)',
         query,
         re.IGNORECASE,
     ):
@@ -1612,7 +1673,7 @@ def normalize_erpnext_unreconcile_payment_grouping(query):
         if canonical in grouped or field in grouped:
             continue
         projection = re.compile(
-            rf'(?<![A-Za-z0-9_])(?P<expr>"tabPayment Ledger Entry"\."{field}")'
+            rf'(?<![A-Za-z0-9_])(?P<expr>(?:"tabPayment Ledger Entry"\.)?"{field}")'
             rf'(?P<alias>\s+(?:AS\s+)?"?[A-Za-z_][A-Za-z0-9_]*"?)?'
             rf'(?=\s*,|\s+FROM\b)',
             re.IGNORECASE,
@@ -1634,32 +1695,32 @@ def normalize_erpnext_reserved_warehouse_distinct(query):
     preserves distinct warehouses ordered by their earliest reservation.
     """
     required = (
-        r'\bSELECT\s+DISTINCT\s+"tabStock Reservation Entry"\."warehouse"',
+        r'\bSELECT\s+DISTINCT\s+(?:"tabStock Reservation Entry"\.)?"warehouse"',
         r'\bFROM\s+"tabStock Reservation Entry"',
-        r'\bORDER\s+BY\s+"tabStock Reservation Entry"\."creation"',
+        r'\bORDER\s+BY\s+(?:"tabStock Reservation Entry"\.)?"creation"',
     )
     if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
         return query
     query = re.sub(
-        r'\bSELECT\s+DISTINCT\s+("tabStock Reservation Entry"\."warehouse")',
+        r'\bSELECT\s+DISTINCT\s+((?:"tabStock Reservation Entry"\.)?"warehouse")',
         r'SELECT \1',
         query,
         count=1,
         flags=re.IGNORECASE,
     )
     order_match = re.search(
-        r'\bORDER\s+BY\s+"tabStock Reservation Entry"\."creation"(?P<direction>\s+(?:ASC|DESC))?',
+        r'\bORDER\s+BY\s+(?:"tabStock Reservation Entry"\.)?"creation"(?P<direction>\s+(?:ASC|DESC))?',
         query,
         re.IGNORECASE,
     )
     if not order_match:
         return query
-    group = ' GROUP BY "tabStock Reservation Entry"."warehouse" '
+    group = ' GROUP BY "warehouse" '
     query = query[: order_match.start()] + group + query[order_match.start() :]
     return re.sub(
-        r'\bORDER\s+BY\s+"tabStock Reservation Entry"\."creation"(?P<direction>\s+(?:ASC|DESC))?',
+        r'\bORDER\s+BY\s+(?:"tabStock Reservation Entry"\.)?"creation"(?P<direction>\s+(?:ASC|DESC))?',
         lambda match: (
-            'ORDER BY MIN("tabStock Reservation Entry"."creation")' + (match.group("direction") or "")
+            'ORDER BY MIN("creation")' + (match.group("direction") or "")
         ),
         query,
         count=1,
@@ -1711,6 +1772,44 @@ def convert_erpnext_modified_timediff(query):
     right = match.group("right")
     return f"SELECT (CAST({left} AS timestamp) - CAST({right} AS timestamp))"
 
+def normalize_hrms_reserved_user_alias(query):
+    """Quote HRMS's legacy ``user`` alias, which is reserved by PostgreSQL."""
+    if not re.search(r'\bFROM\s+"tabHas Role"\s+has_role', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bLEFT\s+JOIN\s+"tabUser"\s+user\b', query, re.IGNORECASE):
+        return query
+    query = re.sub(r'(\bLEFT\s+JOIN\s+"tabUser"\s+)user\b', r'\1"user"', query, flags=re.IGNORECASE)
+    return re.sub(r'(?<!["A-Za-z0-9_])user\.', '"user".', query, flags=re.IGNORECASE)
+
+def normalize_hrms_shift_attendance_grouping(query):
+    """Preserve one Attendance row while aggregating functionally-dependent joined values.
+
+    The legacy report groups by Attendance.name to collapse joined check-in rows,
+    while selecting check-in shift boundaries and Shift Type flags outside the
+    GROUP BY. MariaDB permits that; PostgreSQL does not. These values are constant
+    for an attendance/shift, so MAX preserves the legacy single-row shape.
+    """
+    required = (
+        r'\bFROM\s+"tabAttendance"',
+        r'\bJOIN\s+"tabShift Type"',
+        r'\bJOIN\s+"tabEmployee Checkin"',
+        r'\bGROUP\s+BY\s+"tabAttendance"\."name"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    fields = (
+        'shift_start', 'shift_end', 'shift_actual_start', 'shift_actual_end',
+        'enable_late_entry_marking', 'late_entry_grace_period',
+        'enable_early_exit_marking', 'early_exit_grace_period',
+    )
+    for field in fields:
+        query = re.sub(
+            rf'(?<!MAX\()(?P<expr>"tab(?:Employee Checkin|Shift Type)"\."{field}")',
+            rf'MAX(\g<expr>) AS "{field}"',
+            query, count=1, flags=re.IGNORECASE,
+        )
+    return query
+
 def convert_mysql_update_join(query):
     """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
 
@@ -1740,6 +1839,446 @@ def convert_mysql_update_join(query):
         f'WHERE {match.group("join_condition")} AND {match.group("where_clause")}'
     )
 
+
+
+def convert_mysql_monthname(query):
+    """Translate MySQL MONTHNAME for simple date columns/expressions."""
+    atom = r'(?:"[^"]+"(?:\."[^"]+")?|[A-Za-z_][A-Za-z0-9_$.]*)'
+    return re.sub(
+        rf'\bMONTHNAME\s*\(\s*(?P<expr>{atom})\s*\)',
+        lambda m: f"TO_CHAR({m.group('expr')}, 'FMMonth')",
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_erpnext_deferred_posted_literal(query):
+    """Render the deferred-report posted marker as a string literal."""
+    if not re.search(r'\bFROM\s+"tab(?:Sales|Purchase) Invoice Item"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\b(?:LEFT\s+)?JOIN\s+"tabGL Entry"', query, re.IGNORECASE):
+        return query
+    return re.sub(
+        r'(?<![.A-Za-z0-9_])"posted"(?=\s+FROM\b)',
+        "'posted' AS \"posted\"",
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def convert_mysql_boolean_xor(query):
+    """Translate the aggregate boolean XOR shape used by ERPNext balance checks."""
+    comparison = r"(?:SUM\s*\([^()]+\)(?:\s*-\s*SUM\s*\([^()]+\))?\s*=\s*'0')"
+    pattern = re.compile(rf'(?P<left>{comparison})\s+XOR\s+(?P<right>{comparison})', re.IGNORECASE)
+    return pattern.sub(lambda m: f'(({m.group("left")}) <> ({m.group("right")}))', query)
+
+
+def convert_mysql_show_index(query):
+    """Translate legacy SHOW INDEX queries to PostgreSQL catalog rows."""
+    match = re.match(
+        r'^\s*SHOW\s+INDEX\s+FROM\s+"?(?P<table>tab[^"\s]+(?: [^"\s]+)*)"?'
+        r'(?:\s+WHERE\s+(?P<where>.+?))?\s*$',
+        query,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return query
+    table = match.group("table").replace("'", "''")
+    where = match.group("where") or ""
+    filters = [f"t.relname='{table}'"]
+    column = re.search(r"Column_name\s*=\s*'([^']+)'", where, re.IGNORECASE)
+    if column:
+        filters.append("a.attname='" + column.group(1).replace("'", "''") + "'")
+    if re.search(r"Non_unique\s*=\s*'?0'?", where, re.IGNORECASE):
+        filters.append("ix.indisunique")
+    return (
+        'SELECT i.relname AS "Key_name", a.attname AS "Column_name", '
+        'CASE WHEN ix.indisunique THEN 0 ELSE 1 END AS "Non_unique" '
+        'FROM pg_class t JOIN pg_index ix ON ix.indrelid=t.oid '
+        'JOIN pg_class i ON i.oid=ix.indexrelid '
+        'JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum,ord) ON TRUE '
+        'JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=k.attnum WHERE '
+        + ' AND '.join(filters) + ' ORDER BY i.relname,k.ord'
+    )
+
+
+def normalize_erpnext_future_journal_payment_grouping(query):
+    """Backport ERPNext's PostgreSQL-safe future Journal Entry grouping."""
+    required = (
+        r'\bFROM\s+"tabJournal Entry"\s+JOIN\s+"tabJournal Entry Account"',
+        r'"reference_name"\s+"invoice_no"',
+        r'SUM\s*\(.*?\)\s+"future_amount"',
+        r'\bHAVING\s+"future_amount"\s*>\s*0',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE | re.DOTALL) for pattern in required):
+        return query
+    if re.search(r'\bGROUP\s+BY\b', query, re.IGNORECASE):
+        return query
+    having = re.search(r'\bHAVING\b', query, re.IGNORECASE)
+    if not having:
+        return query
+    group = (
+        ' GROUP BY "tabJournal Entry"."name",'
+        '"tabJournal Entry Account"."reference_name",'
+        '"tabJournal Entry Account"."party",'
+        '"tabJournal Entry Account"."party_type",'
+        '"tabJournal Entry"."posting_date",'
+        '"tabJournal Entry"."cheque_no" '
+    )
+    return query[:having.start()] + group + query[having.start():]
+
+def normalize_erpnext_batchwise_qty_result_shape(query):
+    """Remove Frappe's PostgreSQL-only ordering helper from legacy batch qty rows.
+
+    ERPNext v15 requests exactly ``batch_no`` and ``SUM(qty)`` with ``as_list``
+    and converts each two-cell row into ``frappe._dict``. Frappe v15's PostgreSQL
+    GROUP BY helper appends ``MAX(creation) AS creation`` solely to satisfy the
+    default ORDER BY, changing the public result shape to three cells. Ordering
+    is irrelevant to the dictionary conversion, so remove only that helper and
+    its ORDER BY for this exact grouped Serial and Batch Entry query.
+    """
+    required = (
+        r'\bFROM\s+"tabSerial and Batch Entry"',
+        r'\bSUM\s*\(\s*"?qty"?\s*\)',
+        r'\bGROUP\s+BY\s+"?batch_no"?',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    query, count = re.subn(
+        r',\s*MAX\s*\(\s*(?:"tabSerial and Batch Entry"\.)?"?creation"?\s*\)'
+        r'\s+(?:AS\s+)?"?creation"?',
+        '',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    if not count:
+        return query
+    return re.sub(
+        r'\s+ORDER\s+BY\s+"?creation"?(?:\s+(?:ASC|DESC))?',
+        '',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+
+def normalize_erpnext_pos_payment_grouping(query):
+    """Aggregate the per-mode payment account like current ERPNext."""
+    if not re.search(r'\bFROM\s+"tabSales Invoice Payment"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bGROUP\s+BY\s+"mode_of_payment"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bSUM\s*\(\s*"amount"\s*\)', query, re.IGNORECASE):
+        return query
+    return re.sub(
+        r'(?<![A-Za-z0-9_.])"account"(?=\s*,\s*SUM\s*\()',
+        'MAX("account") AS "account"',
+        query, count=1, flags=re.IGNORECASE,
+    )
+
+
+def normalize_erpnext_gl_account_currency_grouping(query):
+    """Aggregate account_currency when GL rows are summarized by account/dimensions."""
+    if not re.search(r'\bFROM\s+"tabGL Entry"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bGROUP\s+BY\b', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bSUM\s*\(\s*"(?:debit|credit)(?:_in_account_currency)?"\s*\)', query, re.IGNORECASE):
+        return query
+    return re.sub(
+        r'(?<![A-Za-z0-9_.])"account_currency"(?=\s*(?:,|FROM\b))',
+        'MAX("account_currency") AS "account_currency"',
+        query, count=1, flags=re.IGNORECASE,
+    )
+
+
+def normalize_erpnext_gl_voucher_type_grouping(query):
+    """Aggregate voucher_type in voucher_no summaries; voucher_no identifies one voucher type."""
+    if not re.search(r'\bFROM\s+"tabGL Entry"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bGROUP\s+BY\s+"voucher_no"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bSUM\s*\(\s*"debit"\s*\)', query, re.IGNORECASE):
+        return query
+    return re.sub(r'(?<![A-Za-z0-9_.])"voucher_type"(?=\s*,)', 'MAX("voucher_type") AS "voucher_type"', query, count=1, flags=re.IGNORECASE)
+
+
+def normalize_erpnext_budget_child_rate(query):
+    """Move Material Request Item rate inside SUM, matching current ERPNext semantics."""
+    if not re.search(r'\bFROM\s+"tabMaterial Request Item"\s+child\s*,\s*"tabMaterial Request"\s+parent', query, re.IGNORECASE):
+        return query
+    return re.sub(
+        r'SUM\s*\(\s*child\.stock_qty\s*-\s*child\.ordered_qty\s*\)\s*\*\s*(?:child\.)?rate',
+        'SUM((child.stock_qty - child.ordered_qty) * COALESCE(child.rate, 0))',
+        query, count=1, flags=re.IGNORECASE,
+    )
+
+
+def normalize_erpnext_grouped_for_update(query):
+    """Drop grouped FOR UPDATE only for ERPNext batch-valuation aggregates.
+
+    The caller is serialized with a PostgreSQL transaction advisory lock by the
+    compatibility patch, matching current ERPNext. Row-level non-grouped locks
+    remain untouched.
+    """
+    if not re.search(r'\bGROUP\s+BY\b.*\bFOR\s+UPDATE\s*$', query, re.IGNORECASE | re.DOTALL):
+        return query
+    if not re.search(r'\bSUM\s*\(', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bFROM\s+"(?:tabStock Ledger Entry|tabSerial and Batch Bundle)"', query, re.IGNORECASE):
+        return query
+    return re.sub(r'\s+FOR\s+UPDATE\s*$', '', query, flags=re.IGNORECASE)
+
+
+def normalize_erpnext_sales_pipeline_grouping(query):
+    """Backport the grouped field selection used by current Sales Pipeline Analytics."""
+    if not re.search(r'\bFROM\s+"tabOpportunity"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'COUNT\s*\(\s*\*\s*\)', query, re.IGNORECASE):
+        return query
+    group = re.search(
+        r'(?P<prefix>\bGROUP\s+BY\s+)(?P<keys>.+?)(?=\s+ORDER\s+BY\b|\s*$)',
+        query,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not group:
+        return query
+    query = re.sub(r'(?P<select>\bSELECT\s+)"name"\s*,', r'\g<select>', query, count=1, flags=re.IGNORECASE)
+    duration = re.search(
+        r'(?P<expr>(?:TO_CHAR|to_char)\s*\(\s*"expected_closing"\s*,\s*(?:%\([^)]+\)s|\'[^\']+\')\s*\))'
+        r'\s+(?:AS\s+)?"?(?:month|quarter)"?',
+        query,
+        re.IGNORECASE,
+    )
+    if duration and duration.group("expr").lower() not in group.group("keys").lower():
+        # Re-locate GROUP BY after SELECT shortening.
+        group = re.search(
+            r'(?P<prefix>\bGROUP\s+BY\s+)(?P<keys>.+?)(?=\s+ORDER\s+BY\b|\s*$)',
+            query,
+            re.IGNORECASE | re.DOTALL,
+        )
+        query = query[: group.end("keys")] + ',' + duration.group("expr") + query[group.end("keys") :]
+    return query
+
+
+def normalize_erpnext_item_query_table_references(query):
+    """Quote legacy raw-SQL tabItem references to match PostgreSQL's quoted table name."""
+    if not re.search(r'\bFROM\s+"tabItem"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\btabItem\.', query):
+        return query
+    query = re.sub(r'(?<!["A-Za-z0-9_])tabItem\.', '"tabItem".', query)
+    # Legacy item_query uses MySQL's double-quoted ellipsis string in CONCAT.
+    return re.sub(r'(?<=,)\s*"\.\.\."(?=\s*\))', " '...'", query)
+
+
+def normalize_erpnext_bom_valuation_division(query):
+    """NULL-protect ERPNext's aggregate Bin valuation denominator.
+
+    MariaDB returns NULL for division by zero and the surrounding IFNULL/COALESCE
+    turns that into 0. PostgreSQL aborts the statement, so NULLIF the exact
+    aggregate quantity denominator used by BOM valuation.
+    """
+    if not re.search(r'\bFROM\s+"tabBin"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bvaluation_rate\b', query, re.IGNORECASE):
+        return query
+    return re.sub(
+        r'(?P<num>SUM\s*\(\s*"tabBin"\."stock_value"\s*\))\s*/\s*'
+        r'(?P<den>SUM\s*\(\s*"tabBin"\."actual_qty"\s*\))',
+        r'\g<num> / NULLIF(\g<den>, 0)',
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
+
+def normalize_frappe_user_name_casefold(query):
+    """Match MariaDB's case-insensitive User-name lookup semantics on PostgreSQL.
+
+    Frappe normalizes User names/emails to lowercase when inserting. Legacy test
+    and application helpers often probe with mixed case first; MariaDB's default
+    collation finds the lowercase row, while PostgreSQL would miss it and then
+    collide on insert. Restrict this to equality predicates on User.name.
+    """
+    if not re.search(r'\bFROM\s+"tabUser"(?:\s+(?:AS\s+)?[A-Za-z_][A-Za-z0-9_$]*)?', query, re.IGNORECASE):
+        return query
+    field = r'(?P<field>(?:"tabUser"\.)?"name")'
+    value = r'(?P<value>%\([A-Za-z_][A-Za-z0-9_]*\)s|%s|\'[^\']*\')'
+    return re.sub(
+        rf'{field}\s*=\s*{value}',
+        lambda m: f'LOWER({m.group("field")}) = LOWER({m.group("value")})',
+        query, flags=re.IGNORECASE,
+    )
+
+
+
+def normalize_erpnext_bank_reconcile_journal_match_grouping(query):
+    """Aggregate functionally-dependent Journal Entry match fields like current ERPNext."""
+    required = (
+        r'\bFROM\s+"tabJournal Entry Account"\s+JOIN\s+"tabJournal Entry"',
+        r'SUM\s*\(\s*"tabJournal Entry Account"\."(?:debit|credit)_in_account_currency"\s*\)',
+        r'\bGROUP\s+BY\s+"tabJournal Entry"\."name"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    fields = (
+        ("tabJournal Entry", "cheque_no", "reference_no"),
+        ("tabJournal Entry", "cheque_date", "reference_date"),
+        ("tabJournal Entry", "pay_to_recd_from", "party"),
+        ("tabJournal Entry Account", "party_type", "party_type"),
+        ("tabJournal Entry", "posting_date", "posting_date"),
+        ("tabJournal Entry Account", "account_currency", "currency"),
+    )
+    for table, field, alias in fields:
+        pattern = re.compile(
+            rf'(?<![A-Za-z0-9_])(?P<expr>"{re.escape(table)}"\."{field}")'
+            rf'(?P<alias>\s+(?:AS\s+)?"?{alias}"?)?(?=\s*,|\s+FROM\b)',
+            re.IGNORECASE,
+        )
+        query = pattern.sub(
+            lambda m, alias=alias: f'MAX({m.group("expr")}) AS "{alias}"',
+            query, count=1,
+        )
+    query = re.sub(
+        r'\bORDER\s+BY\s+"tabJournal Entry"\."(?:cheque_date|posting_date)"',
+        lambda m: 'ORDER BY MAX(' + m.group(0).split('BY',1)[1].strip() + ')',
+        query, count=1, flags=re.IGNORECASE,
+    )
+    return query
+
+
+def normalize_erpnext_exchange_revaluation_grouping(query):
+    """Aggregate GL party/currency columns grouped through NULLIF, matching develop."""
+    required = (
+        r'\bFROM\s+"tabGL Entry"',
+        r'SUM\s*\(\s*"debit_in_account_currency"\s*\)',
+        r'GROUP\s+BY\s+"account"\s*,\s*NULLIF\s*\(\s*"party_type"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    for field in ("party_type", "party", "account_currency"):
+        query = re.sub(
+            rf'(?<![A-Za-z0-9_.])"{field}"(?=\s*(?:,|FROM\b))',
+            f'MAX("{field}") AS "{field}"', query, count=1, flags=re.IGNORECASE,
+        )
+    return query
+
+
+
+def normalize_erpnext_manufacturing_grouped_details(query):
+    """Aggregate line details in legacy manufacturing summaries grouped by item code."""
+    shapes = {
+        "tabJob Card Scrap Item": ("item_name", "description", "stock_uom"),
+        "tabStock Entry Detail": (
+            "item_name", "description", "stock_uom", "uom", "basic_rate", "conversion_factor",
+            "is_finished_item", "is_scrap_item", "batch_no", "serial_no", "use_serial_batch_fields",
+            "s_warehouse", "t_warehouse", "bom_no",
+        ),
+    }
+    for table, fields in shapes.items():
+        if not re.search(rf'\bFROM\s+"{re.escape(table)}"|\bJOIN\s+"{re.escape(table)}"', query, re.IGNORECASE):
+            continue
+        if not re.search(rf'\bGROUP\s+BY\s+"{re.escape(table)}"\."item_code"', query, re.IGNORECASE):
+            continue
+        for field in fields:
+            query = re.sub(
+                rf'(?<![A-Za-z0-9_])(?P<expr>"{re.escape(table)}"\."{field}")(?=\s*(?:,|FROM\b))',
+                lambda m, field=field: f'MAX({m.group("expr")}) AS "{field}"',
+                query, count=1, flags=re.IGNORECASE,
+            )
+        query = re.sub(
+            rf'\bORDER\s+BY\s+"{re.escape(table)}"\."idx"',
+            f'ORDER BY MIN("{table}"."idx")', query, flags=re.IGNORECASE,
+        )
+        return query
+    return query
+
+
+def normalize_erpnext_requested_items_grouping(query):
+    """Aggregate dependent Material Request fields in the v15 requested-items report."""
+    if not re.search(r'\bFROM\s+"tabMaterial Request"\s+JOIN\s+"tabMaterial Request Item"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'GROUP\s+BY\s+"tabMaterial Request"\."name"\s*,\s*"tabMaterial Request Item"\."item_code"', query, re.IGNORECASE):
+        return query
+    fields = (
+        ("tabMaterial Request", "transaction_date", "date"),
+        ("tabMaterial Request Item", "schedule_date", "required_date"),
+        ("tabMaterial Request Item", "item_name", "item_name"),
+        ("tabMaterial Request Item", "description", "description"),
+        ("tabMaterial Request", "company", "company"),
+    )
+    for table, field, alias in fields:
+        query = re.sub(
+            rf'(?<![A-Za-z0-9_])(?P<expr>"{re.escape(table)}"\."{field}")(?P<alias>\s+(?:AS\s+)?"?{alias}"?)?(?=\s*,|\s+FROM\b)',
+            lambda m, alias=alias: f'MAX({m.group("expr")}) AS "{alias}"',
+            query, count=1, flags=re.IGNORECASE,
+        )
+    for field in ("uom", "stock_uom"):
+        query = re.sub(
+            rf'COALESCE\s*\(\s*"tabMaterial Request Item"\."{field}"\s*,(?P<default>[^)]+)\)',
+            rf'COALESCE(MAX("tabMaterial Request Item"."{field}"),\g<default>)', query, count=1, flags=re.IGNORECASE,
+        )
+    query = re.sub(r'ORDER\s+BY\s+"tabMaterial Request"\."transaction_date"', 'ORDER BY MAX("tabMaterial Request"."transaction_date")', query, flags=re.IGNORECASE)
+    query = re.sub(r',\s*"tabMaterial Request"\."schedule_date"', ',MAX("tabMaterial Request Item"."schedule_date")', query, flags=re.IGNORECASE)
+    return query
+
+
+def normalize_erpnext_pending_so_grouping(query):
+    """Aggregate Sales Order line labels that are dependent on grouped order/item keys."""
+    if not re.search(r'FROM\s+"tabSales Order"\s+so\s*,\s*"tabSales Order Item"\s+so_item', query, re.IGNORECASE):
+        return query
+    if not re.search(r'GROUP\s+BY\s+so\.name\s*,\s*so_item\.item_code', query, re.IGNORECASE):
+        return query
+    for expr, alias in (("so_item.item_name","item_name"),("so_item.description","description"),("so.transaction_date","transaction_date"),("so.customer","customer"),("so.territory","territory"),("so.company","company")):
+        query = re.sub(rf'(?<![A-Za-z0-9_.]){re.escape(expr)}(?=\s*(?:,|FROM\b))', f'MAX({expr}) AS {alias}', query, count=1, flags=re.IGNORECASE)
+    return query
+
+
+def normalize_erpnext_sales_payment_voucher_grouping(query):
+    """Aggregate Journal Entry voucher_type in v15 Sales Payment Summary."""
+    if '"tabJournal Entry" a' not in query or not re.search(r'group\s+by\s+a\.owner\s*,\s*a\.posting_date\s*,\s*mode_of_payment', query, re.IGNORECASE):
+        return query
+    return re.sub(r'coalesce\s*\(\s*a\.voucher_type\s*,', 'coalesce(MAX(a.voucher_type),', query, count=1, flags=re.IGNORECASE)
+
+
+def normalize_erpnext_legacy_identifier_case(query):
+    """Normalize a few known v15 field-label identifiers to their fieldnames."""
+    if re.search(r'\bFROM\s+"tabDelivery Note"', query, re.IGNORECASE):
+        query = re.sub(r'(?<=SELECT )"Status"', '"status"', query, count=1)
+    if re.search(r'\bFROM\s+"tabEmployee"', query, re.IGNORECASE):
+        query = re.sub(r'(?<=ORDER BY )"Name"', '"name"', query)
+    if re.search(r'\b(?:UPDATE|FROM)\s+"tabPurchase Order"', query, re.IGNORECASE):
+        query = re.sub(r'"Status"', '"status"', query)
+    return query
+
+
+def normalize_erpnext_sales_analytics_literals(query):
+    if not re.search(r'\bFROM\s+"tabSales Order"', query, re.IGNORECASE) or '"Order Types"' not in query:
+        return query
+    return query.replace('"Order Types"', "'Order Types'")
+
+
+def normalize_erpnext_sales_order_delay_alias(query):
+    """Inline v15's SELECT delay_days self-reference, which PostgreSQL cannot resolve."""
+    if not re.search(r'\bFROM\s+"tabSales Order"\s+so\s*,', query, re.IGNORECASE):
+        return query
+    m = re.search(r'(?P<expr>\(CAST\(CURRENT_DATE AS DATE\) - CAST\(soi\.delivery_date AS DATE\)\))\s+as\s+delay_days', query, re.IGNORECASE)
+    if not m:
+        return query
+    return re.sub(r'\(SELECT\s+delay_days\)', m.group("expr"), query, flags=re.IGNORECASE)
+
+
+def normalize_erpnext_literal_timestamp_subtraction(query):
+    """Cast the two timestamp literals in legacy modified-date subtraction."""
+    return re.sub(
+        r"^\s*select\s+'(?P<a>\d{4}-\d{2}-\d{2} [^']+)'\s*-\s*'(?P<b>\d{4}-\d{2}-\d{2} [^']+)'\s*$",
+        lambda m: f"select CAST('{m.group('a')}' AS timestamp) - CAST('{m.group('b')}' AS timestamp)",
+        query, flags=re.IGNORECASE,
+    )
 
 def apply_all_query_transformations(query):
     """
@@ -1785,11 +2324,15 @@ def apply_all_query_transformations(query):
     query = convert_if_to_case(query)
     query = convert_ifnull_to_coalesce(query)
     query = convert_date_format(query)
+    query = convert_mysql_monthname(query)
     query = convert_mysql_date_arithmetic(query)
     query = convert_mysql_datediff(query)
+    query = convert_mysql_show_index(query)
     query = convert_mysql_zero_date_sentinel(query)
     query = normalize_erpnext_item_end_of_life_zero_date(query)
+    query = normalize_erpnext_future_journal_payment_grouping(query)
     query = expand_mysql_having_alias(query)
+    query = convert_mysql_boolean_xor(query)
     query = remove_order_by_from_aggregate_only_query(query)
     query = remove_mysql_order_by_null(query)
     query = convert_mysql_limit_offset(query)
@@ -1799,9 +2342,11 @@ def apply_all_query_transformations(query):
     query = remove_erpnext_inventory_dimension_default_order(query)
     query = convert_numeric_truthiness(query)
     query = convert_mysql_double_quoted_literals(query)
+    query = convert_mysql_case_value_literals(query)
     query = convert_mysql_regexp_operator(query)
     query = convert_mysql_timestamp_pair(query)
     query = normalize_erpnext_negative_invoice_voucher_literal(query)
+    query = normalize_erpnext_deferred_posted_literal(query)
     query = normalize_payment_request_single_match_grouping(query)
     query = cast_timestamp_pattern_matches(query)
     query = convert_mysql_inner_join_without_condition(query)
@@ -1810,10 +2355,13 @@ def apply_all_query_transformations(query):
     query = normalize_hrms_income_tax_salary_slip_grouping(query)
     query = normalize_hrms_shift_assignment_empty_end_date(query)
     query = normalize_hrms_skill_assessment_group_order(query)
+    query = normalize_hrms_reserved_user_alias(query)
+    query = normalize_hrms_shift_attendance_grouping(query)
     query = normalize_erpnext_production_plan_subitems_grouping(query)
     query = normalize_erpnext_bank_clearance_journal_query(query)
     query = convert_erpnext_customer_suffix_unsigned(query)
     query = normalize_erpnext_advance_payment_currency_aggregate(query)
+    query = normalize_erpnext_repost_item_fields_grouping(query)
     query = normalize_erpnext_stock_voucher_group_order(query)
     query = normalize_erpnext_work_order_return_grouping(query)
     query = normalize_erpnext_irs_1099_grouping(query)
@@ -1823,9 +2371,29 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_landed_cost_center_aggregate(query)
     query = normalize_erpnext_budget_requested_amount(query)
     query = normalize_erpnext_batch_availability_grouping(query)
+    query = normalize_erpnext_batchwise_qty_result_shape(query)
     query = normalize_erpnext_serial_ledger_distinct_order(query)
     query = normalize_erpnext_stock_ledger_batch_grouping(query)
     query = normalize_erpnext_unreconcile_payment_grouping(query)
+    query = normalize_erpnext_pos_payment_grouping(query)
+    query = normalize_erpnext_gl_account_currency_grouping(query)
+    query = normalize_erpnext_gl_voucher_type_grouping(query)
+    query = normalize_erpnext_budget_child_rate(query)
+    query = normalize_erpnext_grouped_for_update(query)
+    query = normalize_erpnext_sales_pipeline_grouping(query)
+    query = normalize_erpnext_item_query_table_references(query)
+    query = normalize_erpnext_bom_valuation_division(query)
+    query = normalize_frappe_user_name_casefold(query)
+    query = normalize_erpnext_bank_reconcile_journal_match_grouping(query)
+    query = normalize_erpnext_exchange_revaluation_grouping(query)
+    query = normalize_erpnext_manufacturing_grouped_details(query)
+    query = normalize_erpnext_requested_items_grouping(query)
+    query = normalize_erpnext_pending_so_grouping(query)
+    query = normalize_erpnext_sales_payment_voucher_grouping(query)
+    query = normalize_erpnext_legacy_identifier_case(query)
+    query = normalize_erpnext_sales_analytics_literals(query)
+    query = normalize_erpnext_sales_order_delay_alias(query)
+    query = normalize_erpnext_literal_timestamp_subtraction(query)
     query = normalize_erpnext_reserved_warehouse_distinct(query)
     query = convert_erpnext_modified_timediff(query)
     query = convert_mysql_update_join(query)
