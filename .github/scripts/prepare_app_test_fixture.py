@@ -37,7 +37,8 @@ def main():
         print(f"Creating global test dependency: {doctype}")
         make_test_records(doctype, commit=True)
 
-    frappe.db.commit()
+    # Persist the one-time global test setup into the reusable database snapshot consumed by all shards.
+    frappe.db.commit()  # nosemgrep
 
 
 if __name__ == "__main__":
