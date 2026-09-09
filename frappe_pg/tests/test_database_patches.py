@@ -1352,6 +1352,21 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         self.assertNotIn('"balance_in_account_currency"', having)
         self.assertNotIn('"balance"', having)
 
+    def test_future_journal_payments_group_by_reference_dimensions(self):
+        query = (
+            'SELECT "tabJournal Entry Account"."reference_name" "invoice_no",'
+            '"tabJournal Entry Account"."party","tabJournal Entry Account"."party_type",'
+            '"tabJournal Entry"."posting_date" "future_date","tabJournal Entry"."cheque_no" "future_ref",'
+            'SUM("tabJournal Entry Account"."credit") "future_amount" '
+            'FROM "tabJournal Entry" JOIN "tabJournal Entry Account" ON '
+            '"tabJournal Entry Account"."parent"="tabJournal Entry"."name" '
+            'HAVING SUM("tabJournal Entry Account"."credit") > 0'
+        )
+        transformed = normalize_erpnext_future_journal_payment_grouping(query)
+        self.assertIn('GROUP BY "tabJournal Entry"."name"', transformed)
+        self.assertIn('"tabJournal Entry Account"."reference_name"', transformed)
+        self.assertEqual(normalize_erpnext_future_journal_payment_grouping(transformed), transformed)
+
     def test_grouped_gl_financial_fields_use_upstream_aggregates(self):
         query = (
             'SELECT "account","account_currency",SUM("debit") AS "debit",SUM("credit") AS "credit",'
