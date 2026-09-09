@@ -138,6 +138,15 @@ WHERE eca.employee_advance=%s AND ec.approval_status="Approved" AND ec.name=eca.
         self.assertIn('employee_name" AS "name"', transformed)
         self.assertNotIn("AS 'name'", transformed)
 
+    def test_hrms_benefit_claim_aggregate_alias_uses_identifier_quotes(self):
+        query = (
+            "select sum(claimed_amount) as 'total_amount' "
+            '\nfrom "tabEmployee Benefit Claim" where employee=%(employee)s'
+        )
+        transformed = normalize_hrms_legacy_string_literals(query)
+        self.assertIn('AS "total_amount"', transformed)
+        self.assertNotIn("AS 'total_amount'", transformed)
+
     def test_hrms_staffing_plan_aggregate_adds_group_by(self):
         query = """SELECT DISTINCT spd.parent, sp.from_date as from_date, sp.to_date as to_date, sp.name,
 sum(spd.vacancies) as vacancies, spd.designation

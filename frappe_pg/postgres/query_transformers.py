@@ -390,15 +390,19 @@ def normalize_hrms_legacy_string_literals(query):
             flags=re.IGNORECASE,
         )
 
-    # HRMS v15's PostgreSQL birthday/work-anniversary query uses a single-quoted
-    # output alias (employee_name AS 'name'), which PostgreSQL parses as a string
-    # literal rather than an identifier. Keep the rewrite scoped to Employee.
-    if re.search(r'\bFROM\s+"tabEmployee"\b', query, re.IGNORECASE):
+    # Older HRMS raw SQL uses MySQL's single-quoted output-alias syntax,
+    # e.g. ``employee_name AS 'name'`` and ``SUM(...) AS 'total_amount'``.
+    # PostgreSQL requires an identifier alias here. Limit this to recognizable
+    # HRMS tables so normal SQL string literals are untouched.
+    if re.search(
+        r'\bFROM\s+"tab(?:Employee|Employee Benefit Claim|Salary Slip|Salary Detail|Expense Claim(?: Advance)?)"',
+        query,
+        re.IGNORECASE,
+    ):
         query = re.sub(
-            r'\bAS\s+\'name\'(?=\s*,)',
-            'AS "name"',
+            r"\bAS\s+'(?P<alias>[A-Za-z_][A-Za-z0-9_]*)'",
+            lambda match: f'AS "{match.group("alias")}"',
             query,
-            count=1,
             flags=re.IGNORECASE,
         )
     return query
