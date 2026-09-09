@@ -52,6 +52,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_exchange_revaluation_grouping,
     normalize_erpnext_future_journal_payment_grouping,
     normalize_erpnext_gl_account_currency_grouping,
+    normalize_erpnext_gl_stock_account_value_grouping,
     normalize_erpnext_grouped_gl_financial_fields,
     normalize_erpnext_irs_1099_grouping,
     normalize_erpnext_item_end_of_life_zero_date,
@@ -76,6 +77,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_unreconcile_payment_grouping,
     normalize_erpnext_v15_bom_group_query,
     normalize_erpnext_work_order_return_grouping,
+    normalize_frappe_employee_user_casefold,
     normalize_hrms_employee_event_date_parts,
     normalize_hrms_income_tax_salary_slip_grouping,
     normalize_hrms_legacy_string_literals,
@@ -1499,6 +1501,21 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         self.assertIn('MAX("tabStock Ledger Entry"."item_code") AS "item_code"', transformed)
         self.assertIn('MAX("tabStock Ledger Entry"."warehouse") AS "warehouse"', transformed)
         self.assertIn('MAX("tabStock Ledger Entry"."posting_date") AS "posting_date"', transformed)
+
+    def test_gl_stock_account_value_grouping_aggregates_scalars(self):
+        query = (
+            'select "name", "voucher_type", "voucher_no", "posting_date", '
+            'sum("debit_in_account_currency") - sum("credit_in_account_currency") as "account_value" '
+            'from "tabGL Entry" group by voucher_type, voucher_no'
+        )
+        transformed = normalize_erpnext_gl_stock_account_value_grouping(query)
+        self.assertIn('MAX("name") AS "name"', transformed)
+        self.assertIn('MAX("posting_date") AS "posting_date"', transformed)
+
+    def test_employee_user_id_lookup_is_case_insensitive(self):
+        query = 'SELECT "name" FROM "tabEmployee" WHERE "user_id"=%s LIMIT 1'
+        transformed = normalize_frappe_employee_user_casefold(query)
+        self.assertIn('LOWER("user_id") = LOWER(%s)', transformed)
 
     def test_stock_account_value_grouping_splits_posting_max(self):
         query = (

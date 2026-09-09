@@ -2580,6 +2580,48 @@ def normalize_erpnext_stock_account_value_grouping(query):
     return query
 
 
+def normalize_erpnext_gl_stock_account_value_grouping(query):
+    """Backport grouped GL projections from Stock/Account Value report."""
+    required = (
+        r'\bFROM\s+"tabGL Entry"',
+        r'\bGROUP\s+BY\s+"?voucher_type"?\s*,\s*"?voucher_no"?',
+        r'SUM\s*\(\s*"?debit_in_account_currency"?\s*\)',
+        r'SUM\s*\(\s*"?credit_in_account_currency"?\s*\)',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+
+    for field in ("name", "posting_date"):
+        if re.search(
+            rf'MAX\s*\(\s*"?{field}"?\s*\)\s+(?:AS\s+)?"?{field}"?',
+            query,
+            re.IGNORECASE,
+        ):
+            continue
+        query = re.sub(
+            rf'(?P<boundary>\bSELECT\s+|,\s*)(?P<field>"?{field}"?)(?=\s*(?:,|FROM\b))',
+            lambda match, field=field: f'{match.group("boundary")}MAX({match.group("field")}) AS "{field}"',
+            query,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return query
+
+
+def normalize_frappe_employee_user_casefold(query):
+    """Match MariaDB case-insensitive Employee user-link lookups on PostgreSQL."""
+    if not re.search(r'\bFROM\s+"tabEmployee"', query, re.IGNORECASE):
+        return query
+    field = r'(?P<field>(?:"tabEmployee"\.)?"user_id")'
+    value = r'(?P<value>%\([A-Za-z_][A-Za-z0-9_]*\)s|%s|\'[^\']*\')'
+    return re.sub(
+        rf'{field}\s*=\s*{value}',
+        lambda m: f'LOWER({m.group("field")}) = LOWER({m.group("value")})',
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
 def normalize_erpnext_sales_order_analysis_grouping(query):
     """Backport Sales Order Analysis grouping by both joined primary keys.
 
@@ -3023,9 +3065,11 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_stock_ledger_grouped_posting_date(query)
     query = normalize_erpnext_batch_bundle_grouping(query)
     query = normalize_erpnext_stock_account_value_grouping(query)
+    query = normalize_erpnext_gl_stock_account_value_grouping(query)
     query = normalize_erpnext_item_query_table_references(query)
     query = normalize_erpnext_bom_valuation_division(query)
     query = normalize_frappe_user_name_casefold(query)
+    query = normalize_frappe_employee_user_casefold(query)
     query = normalize_erpnext_bank_reconcile_journal_match_grouping(query)
     query = normalize_erpnext_exchange_revaluation_grouping(query)
     query = normalize_erpnext_manufacturing_grouped_details(query)
