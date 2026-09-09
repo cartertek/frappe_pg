@@ -79,13 +79,8 @@ def apply():
             return
 
         from frappe import _
-        from frappe.utils import formatdate
         from frappe import throw
-        throw(
-            _("Previous Fiscal Year {0} has not been closed. Please close it first.").format(
-                previous_fiscal_year[0]
-            )
-        )
+        throw(_("Previous Year is not closed, please close it first"))
 
     _patched = patched
     pcv.PeriodClosingVoucher.check_if_previous_year_closed = patched  # nosemgrep
