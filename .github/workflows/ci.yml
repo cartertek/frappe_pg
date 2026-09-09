@@ -538,15 +538,19 @@ jobs:
           # dimension to keep metadata and physical columns in sync across test rollbacks.
           inventory_test = Path("apps/erpnext/erpnext/stock/doctype/inventory_dimension/test_inventory_dimension.py")
           inventory_source = inventory_test.read_text()
-          inventory_marker = "\t\tif not args.do_not_save:\n\t\t\tdoc.insert(ignore_permissions=True)\n"
-          inventory_replacement = (
-              inventory_marker
-              + "\t\t\tfrappe.db.commit()  # PostgreSQL: match MariaDB DDL implicit-commit test semantics\n"
-          )
-          if inventory_replacement not in inventory_source:
-              if inventory_marker not in inventory_source:
+          inventory_markers = [
+              "\t\tif not args.do_not_save:\n\t\t\tdoc.insert(ignore_permissions=True)\n",
+              "\tif not args.do_not_save:\n\t\tdoc.insert(ignore_permissions=True)\n",
+          ]
+          if "PostgreSQL: match MariaDB DDL implicit-commit test semantics" not in inventory_source:
+              for inventory_marker in inventory_markers:
+                  if inventory_marker in inventory_source:
+                      indent = inventory_marker.split("doc.insert", 1)[0].rsplit("\n", 1)[-1]
+                      inventory_replacement = inventory_marker + indent + "frappe.db.commit()  # PostgreSQL: match MariaDB DDL implicit-commit test semantics\n"
+                      inventory_test.write_text(inventory_source.replace(inventory_marker, inventory_replacement, 1))
+                      break
+              else:
                   raise SystemExit("ERPNext inventory-dimension test helper marker not found")
-              inventory_test.write_text(inventory_source.replace(inventory_marker, inventory_replacement, 1))
 
           # ERPNext v15 creates Supplier.pan once in setUpClass and then rolls
           # back after each test. MariaDB's updatedb DDL implicitly commits the
@@ -579,6 +583,9 @@ jobs:
           bench --site test_site set-config mail_login "test@example.com"
           bench --site test_site set-config mail_password test
           bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
+          # HRMS must start from installed ERPNext state, before ERPNext's own
+          # before_tests/bootstrap mutates global defaults and test records.
+          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/erpnext_base.dump"
           cd sites
           ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext
           cd ..
@@ -594,6 +601,7 @@ jobs:
           name: erpnext-bench-v15
           path: |
             ${{ runner.temp }}/frappe-bench.tar
+            ${{ runner.temp }}/erpnext_base.dump
             ${{ runner.temp }}/test_frappe.dump
           compression-level: 6
           retention-days: 1
@@ -705,15 +713,19 @@ jobs:
           # dimension to keep metadata and physical columns in sync across test rollbacks.
           inventory_test = Path("apps/erpnext/erpnext/stock/doctype/inventory_dimension/test_inventory_dimension.py")
           inventory_source = inventory_test.read_text()
-          inventory_marker = "\t\tif not args.do_not_save:\n\t\t\tdoc.insert(ignore_permissions=True)\n"
-          inventory_replacement = (
-              inventory_marker
-              + "\t\t\tfrappe.db.commit()  # PostgreSQL: match MariaDB DDL implicit-commit test semantics\n"
-          )
-          if inventory_replacement not in inventory_source:
-              if inventory_marker not in inventory_source:
+          inventory_markers = [
+              "\t\tif not args.do_not_save:\n\t\t\tdoc.insert(ignore_permissions=True)\n",
+              "\tif not args.do_not_save:\n\t\tdoc.insert(ignore_permissions=True)\n",
+          ]
+          if "PostgreSQL: match MariaDB DDL implicit-commit test semantics" not in inventory_source:
+              for inventory_marker in inventory_markers:
+                  if inventory_marker in inventory_source:
+                      indent = inventory_marker.split("doc.insert", 1)[0].rsplit("\n", 1)[-1]
+                      inventory_replacement = inventory_marker + indent + "frappe.db.commit()  # PostgreSQL: match MariaDB DDL implicit-commit test semantics\n"
+                      inventory_test.write_text(inventory_source.replace(inventory_marker, inventory_replacement, 1))
+                      break
+              else:
                   raise SystemExit("ERPNext inventory-dimension test helper marker not found")
-              inventory_test.write_text(inventory_source.replace(inventory_marker, inventory_replacement, 1))
           PYFIX
 
       - name: Instrument ERPNext v16 install timing
@@ -737,6 +749,9 @@ jobs:
           bench --site test_site set-config mail_login "test@example.com"
           bench --site test_site set-config mail_password test
           bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
+          # HRMS must start from installed ERPNext state, before ERPNext's own
+          # before_tests/bootstrap mutates global defaults and test records.
+          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/erpnext_base.dump"
           cd sites
           ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext
           cd ..
@@ -752,6 +767,7 @@ jobs:
           name: erpnext-bench-v16
           path: |
             ${{ runner.temp }}/frappe-bench.tar
+            ${{ runner.temp }}/erpnext_base.dump
             ${{ runner.temp }}/test_frappe.dump
           compression-level: 6
           retention-days: 1
@@ -811,7 +827,15 @@ jobs:
           CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
           CREATE DATABASE test_frappe OWNER test_frappe;
           SQL
-          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/erpnext_base.dump"
+          cd /home/runner/frappe-bench/sites
+          ../env/bin/python - <<'PYBASE'
+          import frappe
+          frappe.init(site="test_site")
+          frappe.connect()
+          print("HRMS base default company before HRMS test setup:", frappe.db.get_single_value("Global Defaults", "default_company"))
+          print("HRMS base companies:", frappe.get_all("Company", pluck="name"))
+          PYBASE
       - name: Add HRMS to reusable fixture
         working-directory: /home/runner/frappe-bench
         env:
@@ -892,7 +916,15 @@ jobs:
           CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
           CREATE DATABASE test_frappe OWNER test_frappe;
           SQL
-          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/erpnext_base.dump"
+          cd /home/runner/frappe-bench/sites
+          ../env/bin/python - <<'PYBASE'
+          import frappe
+          frappe.init(site="test_site")
+          frappe.connect()
+          print("HRMS base default company before HRMS test setup:", frappe.db.get_single_value("Global Defaults", "default_company"))
+          print("HRMS base companies:", frappe.get_all("Company", pluck="name"))
+          PYBASE
       - name: Add HRMS to reusable fixture
         working-directory: /home/runner/frappe-bench
         env:
