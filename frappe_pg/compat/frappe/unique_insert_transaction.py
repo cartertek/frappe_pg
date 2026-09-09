@@ -14,6 +14,13 @@ _original_db_insert = None
 _patched_db_insert = None
 
 
+_DATABASE_UNIQUE_DOCTYPES = {
+    # ERPNext creates this composite constraint in Bin.on_doctype_update(); it is
+    # not represented by any individual DocField.unique flag.
+    "Bin",
+}
+
+
 def _load_base_document():
     try:
         from frappe.model.base_document import BaseDocument
@@ -48,7 +55,9 @@ def is_needed():
 
 
 def _document_has_unique_fields(doc):
-    return any(getattr(field, "unique", False) for field in doc.meta.fields)
+    return doc.doctype in _DATABASE_UNIQUE_DOCTYPES or any(
+        getattr(field, "unique", False) for field in doc.meta.fields
+    )
 
 
 def apply():

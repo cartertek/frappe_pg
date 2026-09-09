@@ -7,6 +7,7 @@ from frappe_pg.compat.erpnext import (
     payment_ledger_grouping,
     payment_terms_status,
     period_closing_fiscal_year,
+    pick_list_lock,
     stock_reservation_lock,
     trends_group_by,
 )

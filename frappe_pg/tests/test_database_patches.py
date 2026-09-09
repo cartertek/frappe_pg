@@ -27,6 +27,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_limit_offset,
     convert_mysql_month,
     convert_mysql_monthname,
+    convert_mysql_quarter,
     convert_mysql_regexp_operator,
     convert_mysql_show_index,
     convert_mysql_timestamp_pair,
@@ -40,6 +41,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_asset_depreciation_grouping,
     normalize_erpnext_bank_clearance_journal_query,
     normalize_erpnext_batch_availability_grouping,
+    normalize_erpnext_batch_bundle_grouping,
     normalize_erpnext_batch_empty_expiry_date,
     normalize_erpnext_batchwise_qty_result_shape,
     normalize_erpnext_bom_items_grouping,
@@ -48,17 +50,21 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_exchange_revaluation_grouping,
     normalize_erpnext_future_journal_payment_grouping,
     normalize_erpnext_gl_account_currency_grouping,
+    normalize_erpnext_grouped_gl_financial_fields,
     normalize_erpnext_irs_1099_grouping,
     normalize_erpnext_item_end_of_life_zero_date,
     normalize_erpnext_landed_cost_center_aggregate,
     normalize_erpnext_mode_of_payment_grouping,
     normalize_erpnext_negative_invoice_voucher_literal,
+    normalize_erpnext_production_plan_explosion_grouping,
     normalize_erpnext_production_plan_subitems_grouping,
     normalize_erpnext_repost_item_fields_grouping,
     normalize_erpnext_repost_item_grouping,
     normalize_erpnext_reserved_warehouse_distinct,
+    normalize_erpnext_sales_order_analysis_grouping,
     normalize_erpnext_sales_pipeline_grouping,
     normalize_erpnext_serial_ledger_distinct_order,
+    normalize_erpnext_stock_account_value_grouping,
     normalize_erpnext_stock_ledger_batch_grouping,
     normalize_erpnext_stock_ledger_grouped_posting_date,
     normalize_erpnext_stock_reconciliation_item_defaults,
@@ -66,6 +72,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_unreconcile_payment_grouping,
     normalize_erpnext_v15_bom_group_query,
     normalize_erpnext_work_order_return_grouping,
+    normalize_hrms_employee_event_date_parts,
     normalize_hrms_income_tax_salary_slip_grouping,
     normalize_hrms_legacy_string_literals,
     normalize_hrms_reserved_user_alias,
@@ -73,7 +80,10 @@ from frappe_pg.postgres.query_transformers import (
     normalize_hrms_shift_attendance_grouping,
     normalize_hrms_skill_assessment_group_order,
     normalize_hrms_staffing_plan_aggregate,
+    normalize_mysql_literal_date_time_addition,
     normalize_payment_request_single_match_grouping,
+    normalize_postgres_automatic_index_name,
+    normalize_postgres_unix_timestamp_epoch,
     normalize_postgres_update_target_alias,
     qualify_frappe_grouped_order_aggregate,
     remove_distinct_unselected_default_order,
@@ -154,6 +164,29 @@ class TestQueryTransformers(unittest.TestCase):
     def test_zero_numeric_comparison_is_not_rewritten_as_date(self):
         query = "WHERE COALESCE(amount, 0) >= '0'"
         self.assertEqual(convert_mysql_zero_date_sentinel(query), query)
+
+    def test_postgres_automatic_index_name_is_table_scoped(self):
+        query = 'CREATE INDEX IF NOT EXISTS "item_name" ON "tabItem"("item_name")'
+        self.assertEqual(
+            normalize_postgres_automatic_index_name(query),
+            'CREATE INDEX IF NOT EXISTS "tabItem_item_name_index" ON "tabItem"("item_name")',
+        )
+        explicit = 'CREATE INDEX IF NOT EXISTS "custom_search" ON "tabItem"("item_name")'
+        self.assertEqual(normalize_postgres_automatic_index_name(explicit), explicit)
+
+    def test_literal_date_plus_time_is_typed(self):
+        query = "WHERE posting_date + posting_time > ('2021-01-01' + '00:01:00')"
+        self.assertEqual(
+            normalize_mysql_literal_date_time_addition(query),
+            "WHERE posting_date + posting_time > (DATE '2021-01-01' + TIME '00:01:00')",
+        )
+
+    def test_postgres_unix_timestamp_epoch_is_bigint(self):
+        query = 'SELECT EXTRACT(EPOCH FROM "posting_date") FROM "tabStock Ledger Entry"'
+        self.assertEqual(
+            normalize_postgres_unix_timestamp_epoch(query),
+            'SELECT CAST(EXTRACT(EPOCH FROM "posting_date") AS BIGINT) FROM "tabStock Ledger Entry"',
+        )
 
     def test_mysql_date_sub_curdate_from_erpnext_dashboard(self):
         query = "transaction_date > date_sub(curdate(), interval 1 year)"
@@ -697,6 +730,16 @@ WHERE eca.employee_advance=%s AND ec.approval_status="Approved" AND ec.name=eca.
         self.assertIn('AS "total_amount"', transformed)
         self.assertNotIn("AS 'total_amount'", transformed)
 
+    def test_hrms_employee_event_date_parts_cast_today(self):
+        query = (
+            'SELECT "employee_name" FROM "tabEmployee" WHERE '
+            "DATE_PART('day', date_of_birth) = date_part('day', %(today)s) AND "
+            "DATE_PART('month', date_of_birth) = date_part('month', %(today)s) AND "
+            "DATE_PART('year', date_of_birth) < date_part('year', %(today)s)"
+        )
+        transformed = normalize_hrms_employee_event_date_parts(query)
+        self.assertEqual(transformed.count('CAST(%(today)s AS date)'), 3)
+
     def test_hrms_staffing_plan_aggregate_adds_group_by(self):
         query = """SELECT DISTINCT spd.parent, sp.from_date as from_date, sp.to_date as to_date, sp.name,
 sum(spd.vacancies) as vacancies, spd.designation
@@ -1057,8 +1100,7 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         cases = {
             "select TIMEDIFF(%s, %s)": ("SELECT (CAST(%s AS timestamp) - CAST(%s AS timestamp))"),
             "select TIMEDIFF('2026-09-08 12:00:01', '2026-09-08 12:00:00')": (
-                "SELECT (CAST('2026-09-08 12:00:01' AS timestamp) - "
-                "CAST('2026-09-08 12:00:00' AS timestamp))"
+                "SELECT (CAST('2026-09-08 12:00:01' AS timestamp) - CAST('2026-09-08 12:00:00' AS timestamp))"
             ),
         }
         for query, expected in cases.items():
@@ -1263,7 +1305,7 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         self.assertIn('CAST(NULLIF("last_login", \'\') AS timestamp) > now()', transformed)
 
     def test_batch_empty_expiry_date_is_treated_as_null(self):
-        query = '("tabBatch"."expiry_date" is NULL OR "tabBatch"."expiry_date" = ' ')'
+        query = "(\"tabBatch\".\"expiry_date\" is NULL OR \"tabBatch\".\"expiry_date\" = '')"
         transformed = normalize_erpnext_batch_empty_expiry_date(query)
         self.assertNotIn("= ''", transformed)
         self.assertIn('"tabBatch"."expiry_date" IS NULL', transformed)
@@ -1279,7 +1321,7 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         transformed = normalize_erpnext_sales_pipeline_grouping(query)
         self.assertIn(
             "TO_CHAR(expected_closing, 'FMMonth')",
-            transformed.split(' order by ')[0].lower().replace('to_char', 'TO_CHAR'),
+            transformed.split(' order by ')[0],
         )
         self.assertIn(
             "TO_CHAR(expected_closing, 'FMMonth')", transformed[transformed.lower().index('group by') :]
@@ -1299,10 +1341,125 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         transformed = normalize_erpnext_stock_ledger_grouped_posting_date(query)
         self.assertIn('MAX("posting_date") AS "posting_date"', transformed)
 
-    def test_item_barcode_distinct_drops_default_modified_order(self):
+    def test_having_alias_expands_inside_boolean_parentheses(self):
         query = (
-            'SELECT DISTINCT "barcode" FROM "tabItem Barcode" ' 'ORDER BY "tabItem Barcode"."modified" DESC'
+            'SELECT SUM("debit")-SUM("credit") "balance",'
+            'SUM("debit_in_account_currency")-SUM("credit_in_account_currency") '
+            '"balance_in_account_currency" FROM "tabGL Entry" GROUP BY "account" '
+            'HAVING "balance"<>"balance_in_account_currency" AND '
+            '("balance_in_account_currency"<>0 OR "balance"<>0)'
         )
+        transformed = expand_mysql_having_alias(query)
+        having = transformed[transformed.index("HAVING") :]
+        self.assertNotIn('"balance_in_account_currency"', having)
+        self.assertNotIn('"balance"', having)
+
+    def test_future_journal_payments_group_by_reference_dimensions(self):
+        query = (
+            'SELECT "tabJournal Entry Account"."reference_name" "invoice_no",'
+            '"tabJournal Entry Account"."party","tabJournal Entry Account"."party_type",'
+            '"tabJournal Entry"."posting_date" "future_date","tabJournal Entry"."cheque_no" "future_ref",'
+            'SUM("tabJournal Entry Account"."credit") "future_amount" '
+            'FROM "tabJournal Entry" JOIN "tabJournal Entry Account" ON '
+            '"tabJournal Entry Account"."parent"="tabJournal Entry"."name" '
+            'HAVING SUM("tabJournal Entry Account"."credit") > 0'
+        )
+        transformed = normalize_erpnext_future_journal_payment_grouping(query)
+        self.assertIn('GROUP BY "tabJournal Entry"."name"', transformed)
+        self.assertIn('"tabJournal Entry Account"."reference_name"', transformed)
+        self.assertEqual(normalize_erpnext_future_journal_payment_grouping(transformed), transformed)
+
+    def test_grouped_gl_financial_fields_use_upstream_aggregates(self):
+        query = (
+            'SELECT "account","account_currency",SUM("debit") AS "debit",SUM("credit") AS "credit",'
+            '"debit_in_account_currency","credit_in_account_currency","posting_date","is_opening","fiscal_year" '
+            'FROM "tabGL Entry" GROUP BY "account"'
+        )
+        transformed = normalize_erpnext_grouped_gl_financial_fields(query)
+        self.assertIn('SUM("debit_in_account_currency") AS "debit_in_account_currency"', transformed)
+        self.assertIn('SUM("credit_in_account_currency") AS "credit_in_account_currency"', transformed)
+        self.assertIn('MAX("posting_date") AS "posting_date"', transformed)
+        self.assertIn('MAX("is_opening") AS "is_opening"', transformed)
+        self.assertIn('MAX("fiscal_year") AS "fiscal_year"', transformed)
+
+    def test_having_alias_expansion_is_idempotent_with_qualified_column(self):
+        query = (
+            'SELECT "tabPayment Ledger Entry"."party",'
+            'SUM("tabPayment Ledger Entry"."amount") "amount",'
+            '"tabPayment Ledger Entry"."account" '
+            'FROM "tabPayment Ledger Entry" '
+            'GROUP BY "tabPayment Ledger Entry"."party","tabPayment Ledger Entry"."account" '
+            'HAVING "amount" < 0'
+        )
+        once = apply_all_query_transformations(query)
+        twice = apply_all_query_transformations(once)
+        self.assertEqual(once, twice)
+        self.assertIn('HAVING (SUM("tabPayment Ledger Entry"."amount")) < 0', twice)
+
+    def test_sales_order_analysis_groups_both_primary_keys(self):
+        query = (
+            'SELECT so.transaction_date as date, soi.delivery_date as delivery_date, '
+            'so.name as sales_order, so.status, so.customer, soi.item_code, SUM(sii.qty) as billed_qty '
+            'FROM "tabSales Order" so, "tabSales Order Item" soi '
+            'LEFT JOIN "tabSales Invoice Item" sii ON sii.so_detail=soi.name '
+            'WHERE soi.parent=so.name GROUP BY soi.name ORDER BY so.transaction_date ASC'
+        )
+        transformed = normalize_erpnext_sales_order_analysis_grouping(query)
+        self.assertIn('GROUP BY soi.name, so.name', transformed)
+        self.assertEqual(normalize_erpnext_sales_order_analysis_grouping(transformed), transformed)
+
+    def test_mysql_quarter_is_extracted(self):
+        query = 'SELECT QUARTER(expected_closing) FROM "tabOpportunity"'
+        self.assertEqual(
+            convert_mysql_quarter(query),
+            'SELECT EXTRACT(QUARTER FROM expected_closing) FROM "tabOpportunity"',
+        )
+
+    def test_production_plan_explosion_aggregates_dependent_fields(self):
+        query = (
+            'SELECT SUM("tabBOM Explosion Item"."stock_qty") "qty",'
+            '"tabItem"."item_name","tabBOM Explosion Item"."stock_uom" '
+            'FROM "tabBOM Explosion Item" JOIN "tabBOM" ON 1=1 JOIN "tabItem" ON 1=1 '
+            'GROUP BY "tabBOM Explosion Item"."item_code","tabBOM Explosion Item"."stock_uom"'
+        )
+        transformed = normalize_erpnext_production_plan_explosion_grouping(query)
+        self.assertIn('MAX("tabItem"."item_name") AS "item_name"', transformed)
+
+    def test_batch_bundle_grouping_aggregates_sle_scalars(self):
+        query = (
+            'SELECT "tabStock Ledger Entry"."item_code","tabStock Ledger Entry"."warehouse",'
+            '"tabSerial and Batch Entry"."batch_no","tabStock Ledger Entry"."posting_date",'
+            'SUM("tabSerial and Batch Entry"."qty") "actual_qty" '
+            'FROM "tabStock Ledger Entry" JOIN "tabSerial and Batch Entry" ON 1=1 '
+            'GROUP BY "tabStock Ledger Entry"."voucher_no","tabSerial and Batch Entry"."batch_no",'
+            '"tabSerial and Batch Entry"."warehouse"'
+        )
+        transformed = normalize_erpnext_batch_bundle_grouping(query)
+        self.assertIn('MAX("tabStock Ledger Entry"."item_code") AS "item_code"', transformed)
+        self.assertIn('MAX("tabStock Ledger Entry"."warehouse") AS "warehouse"', transformed)
+        self.assertIn('MAX("tabStock Ledger Entry"."posting_date") AS "posting_date"', transformed)
+
+    def test_stock_account_value_grouping_splits_posting_max(self):
+        query = (
+            'select "name", "voucher_type", "voucher_no", sum(stock_value_difference) as stock_value, '
+            'MAX(posting_date, posting_time) as "posting_date, posting_time" '
+            'from "tabStock Ledger Entry" group by voucher_type, voucher_no '
+            'order by posting_date ASC, posting_time ASC'
+        )
+        transformed = normalize_erpnext_stock_account_value_grouping(query)
+        self.assertNotIn('MAX(posting_date, posting_time)', transformed)
+        self.assertIn('MAX("posting_date") AS "posting_date"', transformed)
+        self.assertIn('MAX("posting_time") AS "posting_time"', transformed)
+
+    def test_item_attribute_numeric_parameter_is_stringified(self):
+        query = 'select v.abbr from "tabItem Attribute Value" v where v.attribute_value=%(attribute_value)s'
+        values = {"attribute_value": 1.1}
+        self.assertEqual(
+            database_patches._normalize_item_attribute_values(query, values)["attribute_value"], "1.1"
+        )
+
+    def test_item_barcode_distinct_drops_default_modified_order(self):
+        query = 'SELECT DISTINCT "barcode" FROM "tabItem Barcode" ORDER BY "tabItem Barcode"."modified" DESC'
         self.assertEqual(
             remove_erpnext_item_barcode_default_order(query),
             'SELECT DISTINCT "barcode" FROM "tabItem Barcode"',
