@@ -1022,6 +1022,22 @@ def normalize_hrms_legacy_string_literals(query):
     return query
 
 
+def normalize_hrms_employee_event_date_parts(query):
+    """Cast HRMS v15 employee-reminder date parameters for PostgreSQL DATE_PART."""
+    if not re.search(r'\bFROM\s+"tabEmployee"', query, re.IGNORECASE):
+        return query
+    if not re.search(
+        r'DATE_PART\s*\(\s*\'day\'\s*,\s*(?:date_of_birth|date_of_joining)\s*\)', query, re.IGNORECASE
+    ):
+        return query
+    return re.sub(
+        r"date_part\s*\(\s*'(?P<part>day|month|year)'\s*,\s*(?P<param>%\([A-Za-z_][A-Za-z0-9_]*\)s)\s*\)",
+        lambda match: f"date_part('{match.group('part')}', CAST({match.group('param')} AS date))",
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
 def normalize_hrms_staffing_plan_aggregate(query):
     """Group HRMS's legacy staffing-plan aggregate by every projected dimension."""
     required = (
@@ -2761,6 +2777,7 @@ def apply_all_query_transformations(query):
     query = cast_timestamp_pattern_matches(query)
     query = convert_mysql_inner_join_without_condition(query)
     query = normalize_hrms_legacy_string_literals(query)
+    query = normalize_hrms_employee_event_date_parts(query)
     query = normalize_hrms_staffing_plan_aggregate(query)
     query = normalize_hrms_income_tax_salary_slip_grouping(query)
     query = normalize_hrms_shift_assignment_empty_end_date(query)
