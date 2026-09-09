@@ -530,6 +530,19 @@ jobs:
                   changed += 1
           if changed != 1:
               raise SystemExit(f"expected exactly one ERPNext workstation fixture correction, changed {changed}")
+
+          # ERPNext v15 creates Supplier.pan once in setUpClass and then rolls
+          # back after each test. MariaDB's updatedb DDL implicitly commits the
+          # class setup; PostgreSQL DDL is transactional, so preserve the
+          # upstream MariaDB test state with an explicit commit at the same point.
+          tax_test = Path("apps/erpnext/erpnext/accounts/doctype/tax_withholding_category/test_tax_withholding_category.py")
+          source = tax_test.read_text()
+          marker = "\t\tmake_pan_no_field()\n"
+          replacement = marker + "\t\tfrappe.db.commit()  # PostgreSQL: match MariaDB DDL implicit-commit test semantics\n"
+          if replacement not in source:
+              if marker not in source:
+                  raise SystemExit("ERPNext v15 tax-withholding setup marker not found")
+              tax_test.write_text(source.replace(marker, replacement, 1))
           PYFIX
 
       - name: Create reusable PostgreSQL ERPNext fixture
@@ -668,6 +681,10 @@ jobs:
           if changed != 1:
               raise SystemExit(f"expected exactly one ERPNext workstation fixture correction, changed {changed}")
           PYFIX
+
+      - name: Instrument ERPNext v16 install timing
+        working-directory: /home/runner/frappe-bench
+        run: python "$GITHUB_WORKSPACE/.github/scripts/instrument_erpnext_install.py"
 
       - name: Create reusable PostgreSQL ERPNext fixture
         working-directory: /home/runner/frappe-bench
