@@ -45,6 +45,24 @@ except Exception:
     # ERPNext might not be installed or available yet.
     pass
 
+
+# Apply ERPNext batch-valuation PostgreSQL locking compatibility backport.
+try:
+    from frappe_pg.patches.v1.fix_erpnext_batch_valuation_locking import apply_batch_valuation_locking_patch
+    apply_batch_valuation_locking_patch()
+except Exception:
+    # ERPNext might not be installed or available yet.
+    pass
+
+
+# Apply ERPNext payment-terms status PostgreSQL compatibility backport.
+try:
+    from frappe_pg.patches.v1.fix_erpnext_payment_terms_status import apply_payment_terms_status_patch
+    apply_payment_terms_status_patch()
+except Exception:
+    # ERPNext might not be installed or available yet.
+    pass
+
 # Apply ERPNext trends.py patch for GROUP BY compatibility
 try:
     from frappe_pg.patches.v1.fix_erpnext_trends import apply_trends_patch
