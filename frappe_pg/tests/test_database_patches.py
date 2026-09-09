@@ -50,6 +50,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_exchange_revaluation_grouping,
     normalize_erpnext_future_journal_payment_grouping,
     normalize_erpnext_gl_account_currency_grouping,
+    normalize_erpnext_grouped_gl_financial_fields,
     normalize_erpnext_irs_1099_grouping,
     normalize_erpnext_item_end_of_life_zero_date,
     normalize_erpnext_landed_cost_center_aggregate,
@@ -1193,6 +1194,32 @@ class TestQueryTransformers(unittest.TestCase):
         )
         transformed = normalize_erpnext_stock_ledger_grouped_posting_date(query)
         self.assertIn('MAX("posting_date") AS "posting_date"', transformed)
+
+    def test_having_alias_expands_inside_boolean_parentheses(self):
+        query = (
+            'SELECT SUM("debit")-SUM("credit") "balance",'
+            'SUM("debit_in_account_currency")-SUM("credit_in_account_currency") '
+            '"balance_in_account_currency" FROM "tabGL Entry" GROUP BY "account" '
+            'HAVING "balance"<>"balance_in_account_currency" AND '
+            '("balance_in_account_currency"<>0 OR "balance"<>0)'
+        )
+        transformed = expand_mysql_having_alias(query)
+        having = transformed[transformed.index("HAVING") :]
+        self.assertNotIn('"balance_in_account_currency"', having)
+        self.assertNotIn('"balance"', having)
+
+    def test_grouped_gl_financial_fields_use_upstream_aggregates(self):
+        query = (
+            'SELECT "account","account_currency",SUM("debit") AS "debit",SUM("credit") AS "credit",'
+            '"debit_in_account_currency","credit_in_account_currency","posting_date","is_opening","fiscal_year" '
+            'FROM "tabGL Entry" GROUP BY "account"'
+        )
+        transformed = normalize_erpnext_grouped_gl_financial_fields(query)
+        self.assertIn('SUM("debit_in_account_currency") AS "debit_in_account_currency"', transformed)
+        self.assertIn('SUM("credit_in_account_currency") AS "credit_in_account_currency"', transformed)
+        self.assertIn('MAX("posting_date") AS "posting_date"', transformed)
+        self.assertIn('MAX("is_opening") AS "is_opening"', transformed)
+        self.assertIn('MAX("fiscal_year") AS "fiscal_year"', transformed)
 
     def test_having_alias_expansion_is_idempotent_with_qualified_column(self):
         query = (
