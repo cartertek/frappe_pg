@@ -1,6 +1,7 @@
 import inspect
-from datetime import time as datetime_time, timedelta
 import unittest
+from datetime import time as datetime_time
+from datetime import timedelta
 from unittest.mock import Mock, patch
 
 import frappe
@@ -14,17 +15,17 @@ from frappe_pg.postgres.query_transformers import (
     cast_timestamp_pattern_matches,
     convert_date_format,
     convert_erpnext_customer_suffix_unsigned,
+    convert_erpnext_modified_timediff,
     convert_if_to_case,
     convert_ifnull_to_coalesce,
-    convert_mysql_date_arithmetic,
     convert_mysql_boolean_xor,
     convert_mysql_case_value_literals,
+    convert_mysql_date_arithmetic,
     convert_mysql_datediff,
-    convert_mysql_monthname,
     convert_mysql_double_quoted_literals,
-    convert_erpnext_modified_timediff,
     convert_mysql_inner_join_without_condition,
     convert_mysql_limit_offset,
+    convert_mysql_monthname,
     convert_mysql_regexp_operator,
     convert_mysql_show_index,
     convert_mysql_timestamp_pair,
@@ -33,29 +34,29 @@ from frappe_pg.postgres.query_transformers import (
     convert_numeric_truthiness,
     expand_mysql_having_alias,
     normalize_erpnext_advance_payment_currency_aggregate,
+    normalize_erpnext_asset_depreciation_grouping,
     normalize_erpnext_bank_clearance_journal_query,
     normalize_erpnext_batch_availability_grouping,
+    normalize_erpnext_batchwise_qty_result_shape,
     normalize_erpnext_bom_items_grouping,
     normalize_erpnext_budget_requested_amount,
+    normalize_erpnext_deferred_posted_literal,
+    normalize_erpnext_future_journal_payment_grouping,
+    normalize_erpnext_irs_1099_grouping,
     normalize_erpnext_item_end_of_life_zero_date,
     normalize_erpnext_landed_cost_center_aggregate,
     normalize_erpnext_mode_of_payment_grouping,
     normalize_erpnext_negative_invoice_voucher_literal,
-    normalize_erpnext_deferred_posted_literal,
-    normalize_erpnext_future_journal_payment_grouping,
     normalize_erpnext_production_plan_subitems_grouping,
-    normalize_erpnext_repost_item_grouping,
     normalize_erpnext_repost_item_fields_grouping,
-    normalize_erpnext_irs_1099_grouping,
-    normalize_erpnext_work_order_return_grouping,
-    normalize_erpnext_asset_depreciation_grouping,
-    normalize_erpnext_batchwise_qty_result_shape,
+    normalize_erpnext_repost_item_grouping,
     normalize_erpnext_reserved_warehouse_distinct,
     normalize_erpnext_serial_ledger_distinct_order,
     normalize_erpnext_stock_ledger_batch_grouping,
     normalize_erpnext_stock_voucher_group_order,
     normalize_erpnext_unreconcile_payment_grouping,
     normalize_erpnext_v15_bom_group_query,
+    normalize_erpnext_work_order_return_grouping,
     normalize_payment_request_single_match_grouping,
     qualify_frappe_grouped_order_aggregate,
     remove_erpnext_inventory_dimension_default_order,
@@ -177,6 +178,16 @@ class TestQueryTransformers(unittest.TestCase):
             transformed,
         )
         self.assertIn("order by failure_rate desc", transformed)
+
+    def test_mysql_having_alias_does_not_rewrite_same_named_column_inside_sum(self):
+        query = (
+            'SELECT SUM("amount_in_account_currency") AS "amount_in_account_currency" '
+            'FROM "tabPayment Ledger Entry" GROUP BY "voucher_no" '
+            'HAVING SUM("amount_in_account_currency") > 0'
+        )
+        transformed = expand_mysql_having_alias(query)
+        self.assertIn('HAVING SUM("amount_in_account_currency") > 0', transformed)
+        self.assertNotIn('SUM((SUM(', transformed)
 
     def test_mysql_having_unknown_alias_is_unchanged(self):
         query = "SELECT count(*) AS total FROM tabThing HAVING other_alias > 0"
@@ -898,9 +909,7 @@ class TestQueryTransformers(unittest.TestCase):
 
     def test_erpnext_modified_timediff_is_timestamp_subtraction(self):
         cases = {
-            "select TIMEDIFF(%s, %s)": (
-                "SELECT (CAST(%s AS timestamp) - CAST(%s AS timestamp))"
-            ),
+            "select TIMEDIFF(%s, %s)": ("SELECT (CAST(%s AS timestamp) - CAST(%s AS timestamp))"),
             "select TIMEDIFF('2026-09-08 12:00:01', '2026-09-08 12:00:00')": (
                 "SELECT (CAST('2026-09-08 12:00:01' AS timestamp) - "
                 "CAST('2026-09-08 12:00:00' AS timestamp))"
