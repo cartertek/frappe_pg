@@ -1956,14 +1956,14 @@ def normalize_erpnext_future_journal_payment_grouping(query):
 
 
 def normalize_erpnext_batchwise_qty_result_shape(query):
-    """Remove Frappe's PostgreSQL-only ordering helper from legacy batch qty rows.
+    """Keep legacy batch-wise quantity rows at their expected two-column shape.
 
-    ERPNext v15 requests exactly ``batch_no`` and ``SUM(qty)`` with ``as_list``
-    and converts each two-cell row into ``frappe._dict``. Frappe v15's PostgreSQL
-    GROUP BY helper appends ``MAX(creation) AS creation`` solely to satisfy the
-    default ORDER BY, changing the public result shape to three cells. Ordering
-    is irrelevant to the dictionary conversion, so remove only that helper and
-    its ORDER BY for this exact grouped Serial and Batch Entry query.
+    ERPNext converts each result row directly into ``frappe._dict`` and therefore
+    requires exactly ``(batch_no, qty)``. Frappe's PostgreSQL GROUP BY compatibility
+    can append an ordering helper column (usually an aggregated creation timestamp),
+    changing the public result shape to three cells. For this exact Serial and Batch
+    Entry query, rebuild the projection and drop ordering entirely; ordering is not
+    observable when the rows are immediately converted into a dictionary.
     """
     required = (
         r'\bFROM\s+"tabSerial and Batch Entry"',
@@ -1972,21 +1972,21 @@ def normalize_erpnext_batchwise_qty_result_shape(query):
     )
     if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
         return query
-    query, count = re.subn(
-        r',\s*MAX\s*\(\s*(?:"tabSerial and Batch Entry"\.)?"?creation"?\s*\)' r'\s+(?:AS\s+)?"?creation"?',
-        '',
-        query,
-        count=1,
-        flags=re.IGNORECASE,
-    )
-    if not count:
+
+    select_match = re.search(r'\bSELECT\b.+?\bFROM\b', query, re.IGNORECASE | re.DOTALL)
+    if not select_match:
         return query
+    rebuilt = (
+        query[: select_match.start()]
+        + 'SELECT "batch_no",SUM("qty") AS "qty" FROM'
+        + query[select_match.end() :]
+    )
     return re.sub(
-        r'\s+ORDER\s+BY\s+"?creation"?(?:\s+(?:ASC|DESC))?',
+        r'\s+ORDER\s+BY\s+.+?(?=(?:\s+LIMIT\s+\d+)?\s*$)',
         '',
-        query,
+        rebuilt,
         count=1,
-        flags=re.IGNORECASE,
+        flags=re.IGNORECASE | re.DOTALL,
     )
 
 
