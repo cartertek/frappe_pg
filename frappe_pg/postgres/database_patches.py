@@ -12,7 +12,8 @@ import hashlib
 import json
 import re
 import time
-from datetime import time as datetime_time, timedelta
+from datetime import time as datetime_time
+from datetime import timedelta
 
 import frappe
 from frappe.database.postgres.database import PostgresDatabase
@@ -54,10 +55,33 @@ def _normalize_zero_timestamp_params(query, values):
     return normalized
 
 
+def _normalize_item_attribute_values(query, values):
+    """Match varchar Item Attribute values against string parameters on PostgreSQL."""
+    if not isinstance(values, dict):
+        return values
+    params = set(
+        re.findall(
+            r'(?:"tabItem Attribute Value"\.)?"?attribute_value"?\s*=\s*%\((?P<param>[A-Za-z_][A-Za-z0-9_]*)\)s',
+            query,
+            re.IGNORECASE,
+        )
+    )
+    changed = [
+        name for name in params if values.get(name) is not None and not isinstance(values.get(name), str)
+    ]
+    if not changed:
+        return values
+    normalized = values.copy()
+    for name in changed:
+        normalized[name] = str(normalized[name])
+    return normalized
+
+
 def patched_transform_query(self, query, values):
     """Apply frappe_pg SQL rewrites while preserving Frappe's values contract."""
     query, values = _original_transform_query(self, query, values)
     values = _normalize_zero_timestamp_params(query, values)
+    values = _normalize_item_attribute_values(query, values)
     return apply_all_query_transformations(query), values
 
 
@@ -182,7 +206,10 @@ def remove_postgres_fixes():
         _replace_class_attribute(PostgresDatabase, "_transform_result", _original_transform_result)
     if PostgresDatabase.is_deadlocked == patched_is_deadlocked:
         _replace_class_attribute(PostgresDatabase, "is_deadlocked", staticmethod(_original_is_deadlocked))
-    if not _had_transaction_advisory_lock and getattr(PostgresDatabase, "transaction_advisory_lock", None) == transaction_advisory_lock:
+    if (
+        not _had_transaction_advisory_lock
+        and getattr(PostgresDatabase, "transaction_advisory_lock", None) == transaction_advisory_lock
+    ):
         delattr(PostgresDatabase, "transaction_advisory_lock")
 
     _patches_applied = False

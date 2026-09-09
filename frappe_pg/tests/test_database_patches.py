@@ -27,6 +27,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_limit_offset,
     convert_mysql_month,
     convert_mysql_monthname,
+    convert_mysql_quarter,
     convert_mysql_regexp_operator,
     convert_mysql_show_index,
     convert_mysql_timestamp_pair,
@@ -40,6 +41,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_asset_depreciation_grouping,
     normalize_erpnext_bank_clearance_journal_query,
     normalize_erpnext_batch_availability_grouping,
+    normalize_erpnext_batch_bundle_grouping,
     normalize_erpnext_batch_empty_expiry_date,
     normalize_erpnext_batchwise_qty_result_shape,
     normalize_erpnext_bom_items_grouping,
@@ -53,12 +55,14 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_landed_cost_center_aggregate,
     normalize_erpnext_mode_of_payment_grouping,
     normalize_erpnext_negative_invoice_voucher_literal,
+    normalize_erpnext_production_plan_explosion_grouping,
     normalize_erpnext_production_plan_subitems_grouping,
     normalize_erpnext_repost_item_fields_grouping,
     normalize_erpnext_repost_item_grouping,
     normalize_erpnext_reserved_warehouse_distinct,
     normalize_erpnext_sales_pipeline_grouping,
     normalize_erpnext_serial_ledger_distinct_order,
+    normalize_erpnext_stock_account_value_grouping,
     normalize_erpnext_stock_ledger_batch_grouping,
     normalize_erpnext_stock_ledger_grouped_posting_date,
     normalize_erpnext_stock_reconciliation_item_defaults,
@@ -946,8 +950,7 @@ class TestQueryTransformers(unittest.TestCase):
         cases = {
             "select TIMEDIFF(%s, %s)": ("SELECT (CAST(%s AS timestamp) - CAST(%s AS timestamp))"),
             "select TIMEDIFF('2026-09-08 12:00:01', '2026-09-08 12:00:00')": (
-                "SELECT (CAST('2026-09-08 12:00:01' AS timestamp) - "
-                "CAST('2026-09-08 12:00:00' AS timestamp))"
+                "SELECT (CAST('2026-09-08 12:00:01' AS timestamp) - CAST('2026-09-08 12:00:00' AS timestamp))"
             ),
         }
         for query, expected in cases.items():
@@ -1164,10 +1167,58 @@ class TestQueryTransformers(unittest.TestCase):
         transformed = normalize_erpnext_stock_ledger_grouped_posting_date(query)
         self.assertIn('MAX("posting_date") AS "posting_date"', transformed)
 
-    def test_item_barcode_distinct_drops_default_modified_order(self):
-        query = (
-            'SELECT DISTINCT "barcode" FROM "tabItem Barcode" ' 'ORDER BY "tabItem Barcode"."modified" DESC'
+    def test_mysql_quarter_is_extracted(self):
+        query = 'SELECT QUARTER(expected_closing) FROM "tabOpportunity"'
+        self.assertEqual(
+            convert_mysql_quarter(query),
+            'SELECT EXTRACT(QUARTER FROM expected_closing) FROM "tabOpportunity"',
         )
+
+    def test_production_plan_explosion_aggregates_dependent_fields(self):
+        query = (
+            'SELECT SUM("tabBOM Explosion Item"."stock_qty") "qty",'
+            '"tabItem"."item_name","tabBOM Explosion Item"."stock_uom" '
+            'FROM "tabBOM Explosion Item" JOIN "tabBOM" ON 1=1 JOIN "tabItem" ON 1=1 '
+            'GROUP BY "tabBOM Explosion Item"."item_code","tabBOM Explosion Item"."stock_uom"'
+        )
+        transformed = normalize_erpnext_production_plan_explosion_grouping(query)
+        self.assertIn('MAX("tabItem"."item_name") AS "item_name"', transformed)
+
+    def test_batch_bundle_grouping_aggregates_sle_scalars(self):
+        query = (
+            'SELECT "tabStock Ledger Entry"."item_code","tabStock Ledger Entry"."warehouse",'
+            '"tabSerial and Batch Entry"."batch_no","tabStock Ledger Entry"."posting_date",'
+            'SUM("tabSerial and Batch Entry"."qty") "actual_qty" '
+            'FROM "tabStock Ledger Entry" JOIN "tabSerial and Batch Entry" ON 1=1 '
+            'GROUP BY "tabStock Ledger Entry"."voucher_no","tabSerial and Batch Entry"."batch_no",'
+            '"tabSerial and Batch Entry"."warehouse"'
+        )
+        transformed = normalize_erpnext_batch_bundle_grouping(query)
+        self.assertIn('MAX("tabStock Ledger Entry"."item_code") AS "item_code"', transformed)
+        self.assertIn('MAX("tabStock Ledger Entry"."warehouse") AS "warehouse"', transformed)
+        self.assertIn('MAX("tabStock Ledger Entry"."posting_date") AS "posting_date"', transformed)
+
+    def test_stock_account_value_grouping_splits_posting_max(self):
+        query = (
+            'select "name", "voucher_type", "voucher_no", sum(stock_value_difference) as stock_value, '
+            'MAX(posting_date, posting_time) as "posting_date, posting_time" '
+            'from "tabStock Ledger Entry" group by voucher_type, voucher_no '
+            'order by posting_date ASC, posting_time ASC'
+        )
+        transformed = normalize_erpnext_stock_account_value_grouping(query)
+        self.assertNotIn('MAX(posting_date, posting_time)', transformed)
+        self.assertIn('MAX("posting_date") AS "posting_date"', transformed)
+        self.assertIn('MAX("posting_time") AS "posting_time"', transformed)
+
+    def test_item_attribute_numeric_parameter_is_stringified(self):
+        query = 'select v.abbr from "tabItem Attribute Value" v where v.attribute_value=%(attribute_value)s'
+        values = {"attribute_value": 1.1}
+        self.assertEqual(
+            database_patches._normalize_item_attribute_values(query, values)["attribute_value"], "1.1"
+        )
+
+    def test_item_barcode_distinct_drops_default_modified_order(self):
+        query = 'SELECT DISTINCT "barcode" FROM "tabItem Barcode" ORDER BY "tabItem Barcode"."modified" DESC'
         self.assertEqual(
             remove_erpnext_item_barcode_default_order(query),
             'SELECT DISTINCT "barcode" FROM "tabItem Barcode"',
