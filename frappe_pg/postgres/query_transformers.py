@@ -1894,7 +1894,7 @@ def normalize_postgres_update_target_alias(query):
     alias = match.group("alias")
     body = re.sub(
         r'(?P<boundary>^|,)\s*' + re.escape(alias) + r'\.(?P<column>"[^"]+")\s*=',
-        lambda m: f'{m.group("boundary")} {m.group("column") }=',
+        lambda m: f'{m.group("boundary")}{" " if m.group("boundary") else ""}{m.group("column") }=',
         match.group("body"),
     )
     if body == match.group("body"):
