@@ -1257,8 +1257,8 @@ def normalize_erpnext_stock_voucher_group_order(query):
         flags=re.IGNORECASE,
     )
     query = re.sub(
-        r'(?P<comma>,\s*)(?P<field>(?:"tabStock Ledger Entry"\.)?"?creation"?)(?=\s*(?:ASC|DESC)?\s*$)',
-        lambda match: f'{match.group("comma")}MIN({match.group("field")})',
+        r'(?P<separator>,\s*|\s+ORDER\s+BY\s+)(?P<field>(?:"tabStock Ledger Entry"\.)?"?creation"?)(?=\s*(?:ASC|DESC)?\s*$)',
+        lambda match: f',MIN({match.group("field")})',
         query,
         count=1,
         flags=re.IGNORECASE,

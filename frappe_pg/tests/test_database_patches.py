@@ -578,7 +578,7 @@ class TestQueryTransformers(unittest.TestCase):
         transformed = normalize_erpnext_stock_voucher_group_order(query)
         self.assertIn('SELECT "voucher_type","voucher_no" FROM', transformed)
         self.assertIn('ORDER BY MIN("posting_datetime")', transformed)
-        self.assertIn('ORDER BY MIN("creation")', transformed)
+        self.assertIn('ORDER BY MIN("posting_datetime"),MIN("creation")', transformed)
         self.assertNotIn('"posting_date","posting_time","creation" FROM', transformed)
 
     def test_other_stock_ledger_group_query_is_unchanged(self):
