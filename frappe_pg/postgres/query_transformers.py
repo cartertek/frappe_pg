@@ -338,6 +338,26 @@ def normalize_mysql_literal_date_time_addition(query):
     )
 
 
+def normalize_erpnext_asset_empty_disposal_date(query):
+    """Treat ERPNext's legacy empty Asset.disposal_date sentinel as NULL."""
+    return re.sub(
+        r'(?P<field>(?:"tabAsset"\.)?"?disposal_date"?)\s*=\s*\'\'',
+        r'\g<field> IS NULL',
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_mysql_strpos_case_truthiness(query):
+    """Convert MySQL-style numeric STRPOS truthiness in CASE WHEN conditions."""
+    return re.sub(
+        r'(?P<prefix>\bCASE\s+WHEN\s+)(?P<expr>strpos\s*\((?:[^()]|%\([^)]+\)s)*\))(?P<space>\s+)(?=THEN\b)',
+        r'\g<prefix>\g<expr> <> 0\g<space>',
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
 def normalize_postgres_unix_timestamp_epoch(query):
     """Match MariaDB UNIX_TIMESTAMP integer-second results for Frappe's PG mapper."""
     return re.sub(
@@ -1087,6 +1107,21 @@ def normalize_hrms_employee_event_date_parts(query):
         query,
         flags=re.IGNORECASE,
     )
+
+
+def normalize_hrms_work_anniversary_date_projection(query):
+    """Backport HRMS v16's date_of_joining projection to the v15 PostgreSQL reminder query."""
+    if not re.search(r'\bFROM\s+"tabEmployee"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'DATE_PART\s*\(\s*\'day\'\s*,\s*date_of_joining\s*\)', query, re.IGNORECASE):
+        return query
+    select_match = re.search(r'\bSELECT\b(?P<select>.+?)\bFROM\b', query, re.IGNORECASE | re.DOTALL)
+    if not select_match or re.search(
+        r'(?<![A-Za-z0-9_])"?date_of_joining"?(?![A-Za-z0-9_])', select_match.group("select"), re.IGNORECASE
+    ):
+        return query
+    replacement = select_match.group(0)[:-4].rstrip() + ', "date_of_joining" FROM'
+    return query[: select_match.start()] + replacement + query[select_match.end() :]
 
 
 def normalize_hrms_staffing_plan_aggregate(query):
@@ -2262,6 +2297,70 @@ def normalize_erpnext_batchwise_qty_result_shape(query):
     )
 
 
+def normalize_erpnext_party_specific_item_based_on(query):
+    """Use the active Party Specific Item field name on legacy ERPNext v15 queries."""
+    if not re.search(r'\b(?:FROM|UPDATE)\s+"tabParty Specific Item"', query, re.IGNORECASE):
+        return query
+    return re.sub(
+        r'(?<![A-Za-z0-9_])"?based_on"?(?=\s*=)',
+        '"based_on_value"',
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_erpnext_bom_stock_reports(query):
+    """Backport PostgreSQL grouping semantics for legacy BOM stock reports."""
+    if not re.search(r'\bFROM\s+"tabBOM Item"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bGROUP\s+BY\s+"tabBOM Item"\."item_code"', query, re.IGNORECASE):
+        return query
+
+    replacements = {
+        "description": "MAX",
+        "item_name": "MAX",
+        "stock_uom": "MAX",
+        "qty_consumed_per_unit": "SUM",
+    }
+    for field, aggregate in replacements.items():
+        if re.search(rf'{aggregate}\s*\(\s*"tabBOM Item"\."{field}"\s*\)', query, re.IGNORECASE):
+            continue
+        query = re.sub(
+            rf'(?<![A-Za-z0-9_.])"tabBOM Item"\."{field}"(?=\s*(?:"[^"]+"|AS\s+"[^"]+")?\s*(?:,|FROM\b))',
+            lambda m, field=field, aggregate=aggregate: f'{aggregate}("tabBOM Item"."{field}")',
+            query,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return query
+
+
+def normalize_erpnext_purchased_items_result_shape(query):
+    """Preserve Supplier Quotation's expected two-column grouped result shape."""
+    required = (
+        r'\bFROM\s+"tabPurchase Order Item"',
+        r'\bSUM\s*\(\s*"?qty"?\s*\)',
+        r'\bGROUP\s+BY\s+"?supplier_quotation_item"?',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    select_match = re.search(r'\bSELECT\b.+?\bFROM\b', query, re.IGNORECASE | re.DOTALL)
+    if not select_match:
+        return query
+    rebuilt = (
+        query[: select_match.start()]
+        + 'SELECT "supplier_quotation_item",SUM("qty") AS "qty" FROM'
+        + query[select_match.end() :]
+    )
+    return re.sub(
+        r'\s+ORDER\s+BY\s+.+?(?=(?:\s+LIMIT\s+\d+)?\s*$)',
+        '',
+        rebuilt,
+        count=1,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+
 def normalize_erpnext_pos_payment_grouping(query):
     """Aggregate the per-mode payment account like current ERPNext."""
     if not re.search(r'\bFROM\s+"tabSales Invoice Payment"', query, re.IGNORECASE):
@@ -2494,6 +2593,48 @@ def normalize_erpnext_stock_account_value_grouping(query):
             flags=re.IGNORECASE,
         )
     return query
+
+
+def normalize_erpnext_gl_stock_account_value_grouping(query):
+    """Backport grouped GL projections from Stock/Account Value report."""
+    required = (
+        r'\bFROM\s+"tabGL Entry"',
+        r'\bGROUP\s+BY\s+"?voucher_type"?\s*,\s*"?voucher_no"?',
+        r'SUM\s*\(\s*"?debit_in_account_currency"?\s*\)',
+        r'SUM\s*\(\s*"?credit_in_account_currency"?\s*\)',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+
+    for field in ("name", "posting_date"):
+        if re.search(
+            rf'MAX\s*\(\s*"?{field}"?\s*\)\s+(?:AS\s+)?"?{field}"?',
+            query,
+            re.IGNORECASE,
+        ):
+            continue
+        query = re.sub(
+            rf'(?P<boundary>\bSELECT\s+|,\s*)(?P<field>"?{field}"?)(?=\s*(?:,|FROM\b))',
+            lambda match, field=field: f'{match.group("boundary")}MAX({match.group("field")}) AS "{field}"',
+            query,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return query
+
+
+def normalize_frappe_employee_user_casefold(query):
+    """Match MariaDB case-insensitive Employee user-link lookups on PostgreSQL."""
+    if not re.search(r'\bFROM\s+"tabEmployee"', query, re.IGNORECASE):
+        return query
+    field = r'(?P<field>(?:"tabEmployee"\.)?"user_id")'
+    value = r'(?P<value>%\([A-Za-z_][A-Za-z0-9_]*\)s|%s|\'[^\']*\')'
+    return re.sub(
+        rf'{field}\s*=\s*{value}',
+        lambda m: f'LOWER({m.group("field")}) = LOWER({m.group("value")})',
+        query,
+        flags=re.IGNORECASE,
+    )
 
 
 def normalize_erpnext_sales_order_analysis_grouping(query):
@@ -2864,6 +3005,8 @@ def apply_all_query_transformations(query):
     query = convert_mysql_quarter(query)
     query = convert_mysql_date_arithmetic(query)
     query = normalize_mysql_literal_date_time_addition(query)
+    query = normalize_erpnext_asset_empty_disposal_date(query)
+    query = normalize_mysql_strpos_case_truthiness(query)
     query = normalize_postgres_unix_timestamp_epoch(query)
     query = normalize_erpnext_activation_last_login_timestamp(query)
     query = normalize_erpnext_batch_empty_expiry_date(query)
@@ -2894,6 +3037,7 @@ def apply_all_query_transformations(query):
     query = convert_mysql_inner_join_without_condition(query)
     query = normalize_hrms_legacy_string_literals(query)
     query = normalize_hrms_employee_event_date_parts(query)
+    query = normalize_hrms_work_anniversary_date_projection(query)
     query = normalize_hrms_staffing_plan_aggregate(query)
     query = normalize_hrms_income_tax_salary_slip_grouping(query)
     query = normalize_hrms_shift_assignment_empty_end_date(query)
@@ -2917,7 +3061,10 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_landed_cost_center_aggregate(query)
     query = normalize_erpnext_budget_requested_amount(query)
     query = normalize_erpnext_batch_availability_grouping(query)
+    query = normalize_erpnext_party_specific_item_based_on(query)
+    query = normalize_erpnext_bom_stock_reports(query)
     query = normalize_erpnext_batchwise_qty_result_shape(query)
+    query = normalize_erpnext_purchased_items_result_shape(query)
     query = normalize_erpnext_stock_reconciliation_item_defaults(query)
     query = normalize_erpnext_serial_ledger_distinct_order(query)
     query = normalize_erpnext_stock_ledger_batch_grouping(query)
@@ -2934,9 +3081,11 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_stock_ledger_grouped_posting_date(query)
     query = normalize_erpnext_batch_bundle_grouping(query)
     query = normalize_erpnext_stock_account_value_grouping(query)
+    query = normalize_erpnext_gl_stock_account_value_grouping(query)
     query = normalize_erpnext_item_query_table_references(query)
     query = normalize_erpnext_bom_valuation_division(query)
     query = normalize_frappe_user_name_casefold(query)
+    query = normalize_frappe_employee_user_casefold(query)
     query = normalize_erpnext_bank_reconcile_journal_match_grouping(query)
     query = normalize_erpnext_exchange_revaluation_grouping(query)
     query = normalize_erpnext_manufacturing_grouped_details(query)

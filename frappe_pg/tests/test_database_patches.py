@@ -39,25 +39,30 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_advance_payment_currency_aggregate,
     normalize_erpnext_advance_payment_reference_grouping,
     normalize_erpnext_asset_depreciation_grouping,
+    normalize_erpnext_asset_empty_disposal_date,
     normalize_erpnext_bank_clearance_journal_query,
     normalize_erpnext_batch_availability_grouping,
     normalize_erpnext_batch_bundle_grouping,
     normalize_erpnext_batch_empty_expiry_date,
     normalize_erpnext_batchwise_qty_result_shape,
     normalize_erpnext_bom_items_grouping,
+    normalize_erpnext_bom_stock_reports,
     normalize_erpnext_budget_requested_amount,
     normalize_erpnext_deferred_posted_literal,
     normalize_erpnext_exchange_revaluation_grouping,
     normalize_erpnext_future_journal_payment_grouping,
     normalize_erpnext_gl_account_currency_grouping,
+    normalize_erpnext_gl_stock_account_value_grouping,
     normalize_erpnext_grouped_gl_financial_fields,
     normalize_erpnext_irs_1099_grouping,
     normalize_erpnext_item_end_of_life_zero_date,
     normalize_erpnext_landed_cost_center_aggregate,
     normalize_erpnext_mode_of_payment_grouping,
     normalize_erpnext_negative_invoice_voucher_literal,
+    normalize_erpnext_party_specific_item_based_on,
     normalize_erpnext_production_plan_explosion_grouping,
     normalize_erpnext_production_plan_subitems_grouping,
+    normalize_erpnext_purchased_items_result_shape,
     normalize_erpnext_repost_item_fields_grouping,
     normalize_erpnext_repost_item_grouping,
     normalize_erpnext_reserved_warehouse_distinct,
@@ -72,6 +77,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_unreconcile_payment_grouping,
     normalize_erpnext_v15_bom_group_query,
     normalize_erpnext_work_order_return_grouping,
+    normalize_frappe_employee_user_casefold,
     normalize_hrms_employee_event_date_parts,
     normalize_hrms_income_tax_salary_slip_grouping,
     normalize_hrms_legacy_string_literals,
@@ -80,7 +86,9 @@ from frappe_pg.postgres.query_transformers import (
     normalize_hrms_shift_attendance_grouping,
     normalize_hrms_skill_assessment_group_order,
     normalize_hrms_staffing_plan_aggregate,
+    normalize_hrms_work_anniversary_date_projection,
     normalize_mysql_literal_date_time_addition,
+    normalize_mysql_strpos_case_truthiness,
     normalize_payment_request_single_match_grouping,
     normalize_postgres_automatic_index_name,
     normalize_postgres_unix_timestamp_epoch,
@@ -179,6 +187,64 @@ class TestQueryTransformers(unittest.TestCase):
         self.assertEqual(
             normalize_mysql_literal_date_time_addition(query),
             "WHERE posting_date + posting_time > (DATE '2021-01-01' + TIME '00:01:00')",
+        )
+
+    def test_asset_empty_disposal_date_is_null(self):
+        query = '("tabAsset"."disposal_date" is NULL OR "tabAsset"."disposal_date" = )'
+        transformed = normalize_erpnext_asset_empty_disposal_date(query)
+        self.assertEqual(
+            transformed,
+            '("tabAsset"."disposal_date" is NULL OR "tabAsset"."disposal_date" IS NULL)',
+        )
+
+    def test_strpos_case_truthiness_is_boolean(self):
+        query = "CASE WHEN strpos( name, %(_txt)s) THEN strpos( name, %(_txt)s) ELSE 99999 END"
+        self.assertEqual(
+            normalize_mysql_strpos_case_truthiness(query),
+            "CASE WHEN strpos( name, %(_txt)s) <> 0 THEN strpos( name, %(_txt)s) ELSE 99999 END",
+        )
+
+    def test_party_specific_item_legacy_based_on_uses_active_field(self):
+        query = (
+            'SELECT "name" FROM "tabParty Specific Item" WHERE "party"=%s '
+            'AND "restrict_based_on"=\'Item\' AND "based_on"=%s'
+        )
+        transformed = normalize_erpnext_party_specific_item_based_on(query)
+        self.assertIn('"based_on_value"=%s', transformed)
+        self.assertNotIn('"based_on"=%s', transformed)
+
+    def test_bom_stock_calculated_groups_scalar_fields(self):
+        query = (
+            'SELECT "tabBOM Item"."item_code","tabBOM Item"."description",'
+            '"tabBOM Item"."qty_consumed_per_unit" "qty_per_unit",SUM("tabBin"."actual_qty") '
+            'FROM "tabBOM Item" LEFT JOIN "tabBin" ON 1=1 GROUP BY "tabBOM Item"."item_code"'
+        )
+        transformed = normalize_erpnext_bom_stock_reports(query)
+        self.assertIn('MAX("tabBOM Item"."description")', transformed)
+        self.assertIn('SUM("tabBOM Item"."qty_consumed_per_unit")', transformed)
+
+    def test_bom_stock_report_groups_text_scalars(self):
+        query = (
+            'SELECT "tabBOM Item"."item_code","tabBOM Item"."item_name","tabBOM Item"."description",'
+            'SUM("tabBOM Item"."stock_qty"),"tabBOM Item"."stock_uom" '
+            'FROM "tabBOM Item" GROUP BY "tabBOM Item"."item_code"'
+        )
+        transformed = normalize_erpnext_bom_stock_reports(query)
+        self.assertIn('MAX("tabBOM Item"."item_name")', transformed)
+        self.assertIn('MAX("tabBOM Item"."description")', transformed)
+        self.assertIn('MAX("tabBOM Item"."stock_uom")', transformed)
+
+    def test_supplier_quotation_purchased_items_keeps_two_columns(self):
+        query = (
+            'SELECT "supplier_quotation_item",SUM("qty"),MAX("modified") AS "modified" '
+            'FROM "tabPurchase Order Item" WHERE "supplier_quotation"=%s '
+            'GROUP BY "supplier_quotation_item" ORDER BY MAX("modified") DESC'
+        )
+        transformed = normalize_erpnext_purchased_items_result_shape(query)
+        self.assertEqual(
+            transformed,
+            'SELECT "supplier_quotation_item",SUM("qty") AS "qty" FROM "tabPurchase Order Item" '
+            'WHERE "supplier_quotation"=%s GROUP BY "supplier_quotation_item"',
         )
 
     def test_postgres_unix_timestamp_epoch_is_bigint(self):
@@ -739,6 +805,16 @@ WHERE eca.employee_advance=%s AND ec.approval_status="Approved" AND ec.name=eca.
         )
         transformed = normalize_hrms_employee_event_date_parts(query)
         self.assertEqual(transformed.count('CAST(%(today)s AS date)'), 3)
+
+    def test_hrms_work_anniversary_projects_date_of_joining(self):
+        query = (
+            'SELECT "personal_email", "company", "company_email", "user_id", '
+            '"employee_name" AS "name", "image" FROM "tabEmployee" WHERE '
+            "DATE_PART('day', date_of_joining) = date_part('day', %(today)s)"
+        )
+        transformed = normalize_hrms_work_anniversary_date_projection(query)
+        self.assertIn('"image", "date_of_joining" FROM "tabEmployee"', transformed)
+        self.assertEqual(normalize_hrms_work_anniversary_date_projection(transformed), transformed)
 
     def test_hrms_staffing_plan_aggregate_adds_group_by(self):
         query = """SELECT DISTINCT spd.parent, sp.from_date as from_date, sp.to_date as to_date, sp.name,
@@ -1438,6 +1514,21 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         self.assertIn('MAX("tabStock Ledger Entry"."item_code") AS "item_code"', transformed)
         self.assertIn('MAX("tabStock Ledger Entry"."warehouse") AS "warehouse"', transformed)
         self.assertIn('MAX("tabStock Ledger Entry"."posting_date") AS "posting_date"', transformed)
+
+    def test_gl_stock_account_value_grouping_aggregates_scalars(self):
+        query = (
+            'select "name", "voucher_type", "voucher_no", "posting_date", '
+            'sum("debit_in_account_currency") - sum("credit_in_account_currency") as "account_value" '
+            'from "tabGL Entry" group by voucher_type, voucher_no'
+        )
+        transformed = normalize_erpnext_gl_stock_account_value_grouping(query)
+        self.assertIn('MAX("name") AS "name"', transformed)
+        self.assertIn('MAX("posting_date") AS "posting_date"', transformed)
+
+    def test_employee_user_id_lookup_is_case_insensitive(self):
+        query = 'SELECT "name" FROM "tabEmployee" WHERE "user_id"=%s LIMIT 1'
+        transformed = normalize_frappe_employee_user_casefold(query)
+        self.assertIn('LOWER("user_id") = LOWER(%s)', transformed)
 
     def test_stock_account_value_grouping_splits_posting_max(self):
         query = (
