@@ -1795,9 +1795,19 @@ def normalize_erpnext_activation_last_login_timestamp(query):
         return query
     return re.sub(
         r'(?<![A-Za-z0-9_.])"?last_login"?(?=\s*>)',
-        'CAST("last_login" AS timestamp)',
+        "CAST(NULLIF(\"last_login\", '') AS timestamp)",
         query,
         count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_erpnext_batch_empty_expiry_date(query):
+    """Treat ERPNext's legacy empty Batch.expiry_date sentinel as NULL."""
+    return re.sub(
+        r'(?P<field>(?:"tabBatch"\.)?"expiry_date")\s*=\s*\'\'',
+        r'\g<field> IS NULL',
+        query,
         flags=re.IGNORECASE,
     )
 
@@ -2408,6 +2418,7 @@ def apply_all_query_transformations(query):
     query = convert_mysql_month(query)
     query = convert_mysql_date_arithmetic(query)
     query = normalize_erpnext_activation_last_login_timestamp(query)
+    query = normalize_erpnext_batch_empty_expiry_date(query)
     query = convert_mysql_datediff(query)
     query = convert_mysql_show_index(query)
     query = convert_mysql_zero_date_sentinel(query)

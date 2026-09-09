@@ -35,6 +35,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_numeric_truthiness,
     expand_mysql_having_alias,
     normalize_erpnext_activation_last_login_timestamp,
+    normalize_erpnext_batch_empty_expiry_date,
     normalize_erpnext_advance_payment_currency_aggregate,
     normalize_erpnext_advance_payment_reference_grouping,
     normalize_erpnext_asset_depreciation_grouping,
@@ -1121,7 +1122,13 @@ class TestQueryTransformers(unittest.TestCase):
     def test_activation_last_login_text_is_cast_for_timestamp_comparison(self):
         query = 'select name from "tabUser" where last_login > now() - INTERVAL \'2 day\' limit 1'
         transformed = normalize_erpnext_activation_last_login_timestamp(query)
-        self.assertIn('CAST("last_login" AS timestamp) > now()', transformed)
+        self.assertIn('CAST(NULLIF("last_login", \'\') AS timestamp) > now()', transformed)
+
+    def test_batch_empty_expiry_date_is_treated_as_null(self):
+        query = '("tabBatch"."expiry_date" is NULL OR "tabBatch"."expiry_date" = '')'
+        transformed = normalize_erpnext_batch_empty_expiry_date(query)
+        self.assertNotIn("= ''", transformed)
+        self.assertIn('"tabBatch"."expiry_date" IS NULL', transformed)
 
     def test_item_barcode_distinct_drops_default_modified_order(self):
         query = (
