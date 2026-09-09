@@ -470,7 +470,11 @@ def expand_mysql_having_alias(query):
 
         def replace_alias(match):
             prefix = suffix[: match.start()].rstrip()
-            if re.search(r'[A-Za-z_][A-Za-z0-9_$]*\s*\(\s*$', prefix):
+            # An identifier immediately inside an open function call is a
+            # column/expression, not a SELECT alias reference. SQL boolean
+            # keywords can also precede parenthesized predicates, so exclude them.
+            function_open = re.search(r'(?P<name>[A-Za-z_][A-Za-z0-9_$]*)\s*\(\s*$', prefix)
+            if function_open and function_open.group("name").upper() not in {"AND", "OR", "NOT"}:
                 return match.group(0)
             return f'({expression})'
 
@@ -2300,6 +2304,43 @@ def normalize_erpnext_gl_account_currency_grouping(query):
     )
 
 
+def normalize_erpnext_grouped_gl_financial_fields(query):
+    """Backport grouped GL projections used by current ERPNext financial statements/tests."""
+    if not re.search(r'\bFROM\s+"tabGL Entry"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bGROUP\s+BY\b', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bSUM\s*\(\s*"?(?:debit|credit)"?\s*\)', query, re.IGNORECASE):
+        return query
+
+    # Current ERPNext sums account-currency debit/credit when collapsing GL rows.
+    for field in ("debit_in_account_currency", "credit_in_account_currency"):
+        if re.search(rf'SUM\s*\(\s*"?{field}"?\s*\)', query, re.IGNORECASE):
+            continue
+        query = re.sub(
+            rf'(?<![A-Za-z0-9_.])"?{field}"?(?=\s*(?:,|FROM\b))',
+            f'SUM("{field}") AS "{field}"',
+            query,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+
+    # Financial statements group by account and current ERPNext aggregates these
+    # scalar GL fields because they are not grouping keys.
+    if re.search(r'\bGROUP\s+BY\s+"?account"?(?:\s|,|$)', query, re.IGNORECASE):
+        for field in ("posting_date", "is_opening", "fiscal_year"):
+            if re.search(rf'MAX\s*\(\s*"?{field}"?\s*\)', query, re.IGNORECASE):
+                continue
+            query = re.sub(
+                rf'(?<![A-Za-z0-9_.])"?{field}"?(?=\s*(?:,|FROM\b))',
+                f'MAX("{field}") AS "{field}"',
+                query,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+    return query
+
+
 def normalize_erpnext_gl_voucher_type_grouping(query):
     """Aggregate voucher_type in voucher_no summaries; voucher_no identifies one voucher type."""
     if not re.search(r'\bFROM\s+"tabGL Entry"', query, re.IGNORECASE):
@@ -2882,6 +2923,7 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_unreconcile_payment_grouping(query)
     query = normalize_erpnext_pos_payment_grouping(query)
     query = normalize_erpnext_gl_account_currency_grouping(query)
+    query = normalize_erpnext_grouped_gl_financial_fields(query)
     query = normalize_erpnext_gl_voucher_type_grouping(query)
     query = normalize_erpnext_budget_child_rate(query)
     query = normalize_erpnext_grouped_for_update(query)
