@@ -17,6 +17,8 @@ from frappe_pg.postgres.query_transformers import (
     normalize_hrms_legacy_string_literals,
     normalize_hrms_shift_assignment_empty_end_date,
     normalize_hrms_skill_assessment_group_order,
+    normalize_hrms_reserved_user_alias,
+    normalize_hrms_shift_attendance_grouping,
     normalize_hrms_staffing_plan_aggregate,
     remove_index_hints,
 )
@@ -223,6 +225,29 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
     def test_double_quoted_identifier_rhs_is_not_rewritten(self):
         query = 'SELECT * FROM "tabEmployee Advance" WHERE "paid_amount" = "return_amount"'
         self.assertEqual(convert_mysql_double_quoted_literals(query), query)
+
+    def test_hrms_reserved_user_alias_is_quoted(self):
+        query = (
+            'SELECT DISTINCT(has_role.parent) FROM "tabHas Role" has_role '
+            'LEFT JOIN "tabUser" user ON has_role.parent = user.name '
+            "WHERE has_role.parenttype = 'User' AND user.enabled = '1'"
+        )
+        transformed = normalize_hrms_reserved_user_alias(query)
+        self.assertIn('LEFT JOIN "tabUser" "user"', transformed)
+        self.assertIn('"user".name', transformed)
+        self.assertIn('"user".enabled', transformed)
+
+    def test_hrms_shift_attendance_joined_values_are_aggregated(self):
+        query = (
+            'SELECT "tabAttendance"."name","tabEmployee Checkin"."shift_start",'
+            '"tabEmployee Checkin"."shift_end","tabShift Type"."enable_late_entry_marking" '
+            'FROM "tabAttendance" JOIN "tabShift Type" ON 1=1 '
+            'JOIN "tabEmployee Checkin" ON 1=1 GROUP BY "tabAttendance"."name"'
+        )
+        transformed = normalize_hrms_shift_attendance_grouping(query)
+        self.assertIn('MAX("tabEmployee Checkin"."shift_start") AS "shift_start"', transformed)
+        self.assertIn('MAX("tabEmployee Checkin"."shift_end") AS "shift_end"', transformed)
+        self.assertIn('MAX("tabShift Type"."enable_late_entry_marking") AS "enable_late_entry_marking"', transformed)
 
     def test_simple_mysql_update_join(self):
         query = (
