@@ -1484,6 +1484,27 @@ def convert_mysql_limit_offset(query):
     )
 
 
+
+def convert_erpnext_modified_timediff(query):
+    """Translate ERPNext v15/v16 modified-date TIMEDIFF checks.
+
+    Material Request and Sales Order use ``SELECT TIMEDIFF(a, b)`` only to
+    detect whether two modification timestamps differ. PostgreSQL has no
+    TIMEDIFF function; timestamp subtraction returns an interval with the same
+    zero/non-zero truth needed by those callers. Cast both operands because
+    DB-API placeholders and quoted literals otherwise have unknown type.
+    """
+    match = re.fullmatch(
+        r"\s*SELECT\s+TIMEDIFF\(\s*(?P<left>.+?)\s*,\s*(?P<right>.+?)\s*\)\s*;?\s*",
+        query,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return query
+    left = match.group("left")
+    right = match.group("right")
+    return f"SELECT (CAST({left} AS timestamp) - CAST({right} AS timestamp))"
+
 def convert_mysql_update_join(query):
     """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
 
@@ -1592,6 +1613,7 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_stock_ledger_batch_grouping(query)
     query = normalize_erpnext_unreconcile_payment_grouping(query)
     query = normalize_erpnext_reserved_warehouse_distinct(query)
+    query = convert_erpnext_modified_timediff(query)
     query = convert_mysql_update_join(query)
 
     # Debug: Log if IF() is still present after transformation

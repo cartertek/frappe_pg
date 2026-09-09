@@ -17,6 +17,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_date_arithmetic,
     convert_mysql_datediff,
     convert_mysql_double_quoted_literals,
+    convert_erpnext_modified_timediff,
     convert_mysql_inner_join_without_condition,
     convert_mysql_limit_offset,
     convert_mysql_regexp_operator,
@@ -816,6 +817,24 @@ class TestQueryTransformers(unittest.TestCase):
             convert_mysql_limit_offset('SELECT name FROM t LIMIT 10, 20'),
             'SELECT name FROM t LIMIT 20 OFFSET 10',
         )
+
+    def test_erpnext_modified_timediff_is_timestamp_subtraction(self):
+        cases = {
+            "select TIMEDIFF(%s, %s)": (
+                "SELECT (CAST(%s AS timestamp) - CAST(%s AS timestamp))"
+            ),
+            "select TIMEDIFF('2026-09-08 12:00:01', '2026-09-08 12:00:00')": (
+                "SELECT (CAST('2026-09-08 12:00:01' AS timestamp) - "
+                "CAST('2026-09-08 12:00:00' AS timestamp))"
+            ),
+        }
+        for query, expected in cases.items():
+            with self.subTest(query=query):
+                self.assertEqual(convert_erpnext_modified_timediff(query), expected)
+
+    def test_timediff_transform_is_limited_to_erpnext_select_shape(self):
+        query = "SELECT name, TIMEDIFF(end_time, start_time) FROM tabExample"
+        self.assertEqual(convert_erpnext_modified_timediff(query), query)
 
     def test_simple_mysql_update_join(self):
         query = (
