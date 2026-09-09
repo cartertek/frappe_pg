@@ -389,6 +389,18 @@ def normalize_hrms_legacy_string_literals(query):
             query,
             flags=re.IGNORECASE,
         )
+
+    # HRMS v15's PostgreSQL birthday/work-anniversary query uses a single-quoted
+    # output alias (employee_name AS 'name'), which PostgreSQL parses as a string
+    # literal rather than an identifier. Keep the rewrite scoped to Employee.
+    if re.search(r'\bFROM\s+"tabEmployee"\b', query, re.IGNORECASE):
+        query = re.sub(
+            r'\bAS\s+\'name\'(?=\s*,)',
+            'AS "name"',
+            query,
+            count=1,
+            flags=re.IGNORECASE,
+        )
     return query
 
 
@@ -467,7 +479,6 @@ def normalize_hrms_skill_assessment_group_order(query):
     )
 
 
-
 def normalize_hrms_reserved_user_alias(query):
     """Quote HRMS's legacy ``user`` alias, which is reserved by PostgreSQL."""
     if not re.search(r'\bFROM\s+"tabHas Role"\s+has_role', query, re.IGNORECASE):
@@ -495,17 +506,25 @@ def normalize_hrms_shift_attendance_grouping(query):
     if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
         return query
     fields = (
-        'shift_start', 'shift_end', 'shift_actual_start', 'shift_actual_end',
-        'enable_late_entry_marking', 'late_entry_grace_period',
-        'enable_early_exit_marking', 'early_exit_grace_period',
+        'shift_start',
+        'shift_end',
+        'shift_actual_start',
+        'shift_actual_end',
+        'enable_late_entry_marking',
+        'late_entry_grace_period',
+        'enable_early_exit_marking',
+        'early_exit_grace_period',
     )
     for field in fields:
         query = re.sub(
             rf'(?<!MAX\()(?P<expr>"tab(?:Employee Checkin|Shift Type)"\."{field}")',
             rf'MAX(\g<expr>) AS "{field}"',
-            query, count=1, flags=re.IGNORECASE,
+            query,
+            count=1,
+            flags=re.IGNORECASE,
         )
     return query
+
 
 def convert_mysql_update_join(query):
     """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.

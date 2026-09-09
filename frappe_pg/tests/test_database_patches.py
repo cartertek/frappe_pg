@@ -15,10 +15,10 @@ from frappe_pg.postgres.query_transformers import (
     convert_numeric_truthiness,
     normalize_hrms_income_tax_salary_slip_grouping,
     normalize_hrms_legacy_string_literals,
-    normalize_hrms_shift_assignment_empty_end_date,
-    normalize_hrms_skill_assessment_group_order,
     normalize_hrms_reserved_user_alias,
+    normalize_hrms_shift_assignment_empty_end_date,
     normalize_hrms_shift_attendance_grouping,
+    normalize_hrms_skill_assessment_group_order,
     normalize_hrms_staffing_plan_aggregate,
     remove_index_hints,
 )
@@ -128,6 +128,15 @@ WHERE eca.employee_advance=%s AND ec.approval_status="Approved" AND ec.name=eca.
         )
         transformed = normalize_hrms_legacy_string_literals(query)
         self.assertIn("sd.parentfield='earnings'", transformed)
+
+    def test_hrms_employee_reminder_alias_uses_identifier_quotes(self):
+        query = (
+            "SELECT \"personal_email\", \"employee_name\" AS 'name', \"image\" "
+            "FROM \"tabEmployee\" WHERE \"status\"='Active'"
+        )
+        transformed = normalize_hrms_legacy_string_literals(query)
+        self.assertIn('employee_name" AS "name"', transformed)
+        self.assertNotIn("AS 'name'", transformed)
 
     def test_hrms_staffing_plan_aggregate_adds_group_by(self):
         query = """SELECT DISTINCT spd.parent, sp.from_date as from_date, sp.to_date as to_date, sp.name,
@@ -247,7 +256,9 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         transformed = normalize_hrms_shift_attendance_grouping(query)
         self.assertIn('MAX("tabEmployee Checkin"."shift_start") AS "shift_start"', transformed)
         self.assertIn('MAX("tabEmployee Checkin"."shift_end") AS "shift_end"', transformed)
-        self.assertIn('MAX("tabShift Type"."enable_late_entry_marking") AS "enable_late_entry_marking"', transformed)
+        self.assertIn(
+            'MAX("tabShift Type"."enable_late_entry_marking") AS "enable_late_entry_marking"', transformed
+        )
 
     def test_simple_mysql_update_join(self):
         query = (
