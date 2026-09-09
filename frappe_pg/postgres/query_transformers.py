@@ -1188,7 +1188,9 @@ def convert_mysql_timestamp_pair(query):
     this transform to simple identifiers so one-argument casts/functions are
     never confused with this MySQL extension.
     """
-    atom = r'(?:(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)\.)?"?[A-Za-z_][A-Za-z0-9_$]*"?'
+    identifier = r'(?:(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)\.)?"?[A-Za-z_][A-Za-z0-9_$]*"?'
+    placeholder = r'%(?:s|\([A-Za-z_][A-Za-z0-9_]*\)s)'
+    atom = rf'(?:{identifier}|{placeholder})'
     pattern = re.compile(
         rf"\bTIMESTAMP\s*\(\s*(?P<date>{atom})\s*,\s*(?P<time>{atom})\s*\)",
         re.IGNORECASE,
@@ -1210,7 +1212,7 @@ def normalize_erpnext_work_order_return_grouping(query):
         r'\bJOIN\s+"tabStock Entry Detail"',
         r'"tabStock Entry Detail"\."original_item"',
         r'SUM\s*\(\s*"tabStock Entry Detail"\."transfer_qty"',
-        r'"tabStock Entry"\."is_return"\s*=\s*1',
+        r'"tabStock Entry"\."is_return"\s*=\s*[\'"]?1[\'"]?',
         r'GROUP\s+BY\s+"tabStock Entry Detail"\."item_code"',
     )
     if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
@@ -1218,6 +1220,31 @@ def normalize_erpnext_work_order_return_grouping(query):
     return re.sub(
         r'(GROUP\s+BY\s+"tabStock Entry Detail"\."item_code")(?!\s*,)',
         r'\1,"tabStock Entry Detail"."original_item"',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_erpnext_irs_1099_grouping(query):
+    """Match ERPNext develop's complete IRS 1099 grouping dimensions.
+
+    Older ERPNext groups only by supplier while selecting supplier_group and
+    tax_id. Both are attributes of that supplier and develop groups by all
+    three fields explicitly for PostgreSQL compatibility.
+    """
+    required = (
+        r'\bFROM\s+"tabGL Entry"\s+gl',
+        r'"?s"?\."?supplier_group"?',
+        r'"?s"?\."?tax_id"?',
+        r'SUM\s*\(\s*gl\.debit_in_account_currency',
+        r'GROUP\s+BY\s+gl\.party',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    return re.sub(
+        r'(GROUP\s+BY\s+gl\.party)(?!\s*,)',
+        r'\1, s.supplier_group, s.tax_id',
         query,
         count=1,
         flags=re.IGNORECASE,
@@ -1663,6 +1690,7 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_advance_payment_currency_aggregate(query)
     query = normalize_erpnext_stock_voucher_group_order(query)
     query = normalize_erpnext_work_order_return_grouping(query)
+    query = normalize_erpnext_irs_1099_grouping(query)
     query = normalize_erpnext_asset_depreciation_grouping(query)
     query = normalize_erpnext_repost_item_grouping(query)
     query = normalize_erpnext_mode_of_payment_grouping(query)
