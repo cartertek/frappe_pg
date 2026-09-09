@@ -446,8 +446,8 @@ jobs:
           retention-days: 1
 
 
-  upstream-postgres-tests:
-    needs: [prepare-upstream-frappe, prepare-upstream-apps]
+  upstream-frappe-postgres-tests:
+    needs: prepare-upstream-frappe
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -530,110 +530,6 @@ jobs:
             node: 18
             artifact: frappe-bench-v15
             test_group: commands
-          - frappe: version-15
-            app: erpnext
-            app_branch: version-15
-            label: ERPNext v15 / payment reconciliation
-            python: '3.10'
-            node: 18
-            artifact: erpnext-bench-v15
-            test_group: payment-reconciliation
-          - frappe: version-15
-            app: erpnext
-            app_branch: version-15
-            label: ERPNext v15 / remainder 1
-            python: '3.10'
-            node: 18
-            artifact: erpnext-bench-v15
-            test_group: remainder-1
-          - frappe: version-15
-            app: erpnext
-            app_branch: version-15
-            label: ERPNext v15 / remainder 2
-            python: '3.10'
-            node: 18
-            artifact: erpnext-bench-v15
-            test_group: remainder-2
-          - frappe: version-15
-            app: erpnext
-            app_branch: version-15
-            label: ERPNext v15 / remainder 3
-            python: '3.10'
-            node: 18
-            artifact: erpnext-bench-v15
-            test_group: remainder-3
-          - frappe: version-15
-            app: erpnext
-            app_branch: version-15
-            label: ERPNext v15 / remainder 4
-            python: '3.10'
-            node: 18
-            artifact: erpnext-bench-v15
-            test_group: remainder-4
-          - frappe: version-15
-            app: erpnext
-            app_branch: version-15
-            label: ERPNext v15 / remainder 5
-            python: '3.10'
-            node: 18
-            artifact: erpnext-bench-v15
-            test_group: remainder-5
-          - frappe: version-15
-            app: erpnext
-            app_branch: version-15
-            label: ERPNext v15 / remainder 6
-            python: '3.10'
-            node: 18
-            artifact: erpnext-bench-v15
-            test_group: remainder-6
-          - frappe: version-15
-            app: hrms
-            app_branch: version-15
-            label: HRMS v15 / leave heavy
-            python: '3.10'
-            node: 18
-            artifact: hrms-bench-v15
-            test_group: leave-heavy
-          - frappe: version-15
-            app: hrms
-            app_branch: version-15
-            label: HRMS v15 / payroll heavy
-            python: '3.10'
-            node: 18
-            artifact: hrms-bench-v15
-            test_group: payroll-heavy
-          - frappe: version-15
-            app: hrms
-            app_branch: version-15
-            label: HRMS v15 / remainder 1
-            python: '3.10'
-            node: 18
-            artifact: hrms-bench-v15
-            test_group: remainder-1
-          - frappe: version-15
-            app: hrms
-            app_branch: version-15
-            label: HRMS v15 / remainder 2
-            python: '3.10'
-            node: 18
-            artifact: hrms-bench-v15
-            test_group: remainder-2
-          - frappe: version-15
-            app: hrms
-            app_branch: version-15
-            label: HRMS v15 / remainder 3
-            python: '3.10'
-            node: 18
-            artifact: hrms-bench-v15
-            test_group: remainder-3
-          - frappe: version-15
-            app: hrms
-            app_branch: version-15
-            label: HRMS v15 / remainder 4
-            python: '3.10'
-            node: 18
-            artifact: hrms-bench-v15
-            test_group: remainder-4
           - frappe: version-16
             app: frappe
             label: Frappe v16 / remainder 1
@@ -711,6 +607,345 @@ jobs:
             node: 24
             artifact: frappe-bench-v16
             test_group: commands
+    name: PostgreSQL upstream / ${{ matrix.label }}
+
+    services:
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+      smtp-server:
+        image: rnwood/smtp4dev:3.7.1
+        ports:
+          - 2525:25
+          - 3000:80
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: true
+
+      - name: Install test system dependencies
+        run: |
+          wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y /tmp/wkhtmltox.deb
+
+      - name: Download prepared Frappe bench
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/prepared-bench
+
+      - name: Restore prepared Frappe bench
+        run: |
+          tar -C /home/runner -xf "$RUNNER_TEMP/prepared-bench/frappe-bench.tar"
+          pip install frappe-bench
+
+      - name: Create PostgreSQL test site
+        if: matrix.app == 'frappe'
+        working-directory: /home/runner/frappe-bench
+        run: |
+          # Frappe's own command tests read these from common_site_config,
+          # not from the arguments used to create the primary test site.
+          bench set-config root_login postgres -g
+          bench set-config root_password root -g
+          bench set-config admin_password admin -g
+          bench set-config db_type postgres -g
+
+          # Create the site with stock Frappe first. Frappe's before_tests hook
+          # intentionally skips setup when another app is already installed.
+          bench new-site test_site \
+            --db-type postgres \
+            --db-host 127.0.0.1 \
+            --db-port 5432 \
+            --db-name test_frappe \
+            --db-password test_frappe \
+            --db-root-username postgres \
+            --db-root-password root \
+            --admin-password admin
+
+          if [[ "${{ matrix.app }}" == "frappe" ]]; then
+            bench --site test_site execute frappe.utils.install.before_tests
+          fi
+          bench --site test_site install-app frappe_pg
+
+          if [[ "${{ matrix.app }}" == "erpnext" ]]; then
+            bench --site test_site install-app payments
+            bench --site test_site install-app erpnext
+          elif [[ "${{ matrix.app }}" == "hrms" ]]; then
+            bench --site test_site install-app payments
+            bench --site test_site install-app erpnext
+            bench --site test_site install-app hrms
+          fi
+
+          bench --site test_site set-config allow_tests 1 --parse
+          bench --site test_site set-config server_script_enabled 1 --parse
+          bench --site test_site set-config host_name "http://test_site:8000"
+          bench --site test_site set-config auto_email_id "test@example.com"
+          bench --site test_site set-config mail_server localhost
+          bench --site test_site set-config mail_port 2525 --parse
+          bench --site test_site set-config mail_login "test@example.com"
+          bench --site test_site set-config mail_password test
+          bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
+
+          # ERPNext v16's upstream server-test workflow explicitly warms its
+          # bootstrap records before running the suite. Without that pass, later
+          # bootstrap records can reference fixtures (for example the _TC
+          # warehouse) that have not been created yet. HRMS consumes the same
+          # ERPNext test data.
+          if [[ "${{ matrix.frappe }}" == "version-16" && "${{ matrix.app }}" != "frappe" ]]; then
+            bench --site test_site run-tests --lightmode --module erpnext.tests.bootstrap_test_data
+          fi
+
+          # Redis is provided by Actions services. Keep the web and worker
+          # processes that upstream Frappe's server-test setup starts.
+          sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
+        env:
+          CI: 'Yes'
+
+      - name: Restore reusable PostgreSQL app fixture
+        if: matrix.app != 'frappe'
+        env:
+          PGPASSWORD: root
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
+          CREATE DATABASE test_frappe OWNER test_frappe;
+          SQL
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe \
+            --dbname test_frappe \
+            --no-owner \
+            --no-privileges \
+            "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
+
+      - name: Start Frappe services
+        working-directory: /home/runner/frappe-bench
+        run: |
+          echo "127.0.0.1 test_site" | sudo tee -a /etc/hosts
+          bench start > "$GITHUB_WORKSPACE/bench_start.log" 2>&1 &
+
+          for _ in {1..30}; do
+            if curl --fail --silent --output /dev/null http://test_site:8000; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          cat "$GITHUB_WORKSPACE/bench_start.log"
+          exit 1
+
+      - name: Run upstream application tests
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench --site test_site set-config allow_tests true
+          if [[ "${{ matrix.app }}" == "frappe" ]]; then
+            cd sites
+            status=0
+            ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_frappe_test_group.py" \
+              --site test_site \
+              --group "${{ matrix.test_group }}" || status=$?
+
+            exit "$status"
+          else
+            cd sites
+            status=0
+            ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_app_test_group.py" \
+              --site test_site \
+              --app "${{ matrix.app }}" \
+              --group "${{ matrix.test_group }}" || status=$?
+
+            exit "$status"
+          fi
+        env:
+          TYPE: server
+          FRAPPE_BENCH_ROOT: /home/runner/frappe-bench
+
+
+  upstream-postgres-tests:
+    needs: prepare-upstream-apps
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / payment reconciliation
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: payment-reconciliation
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 1
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-1
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 2
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-2
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 3
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-3
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 4
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-4
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 5
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-5
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 6
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-6
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 7
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-7
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 8
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-8
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 9
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-9
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 10
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-10
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / leave heavy
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: leave-heavy
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / payroll heavy
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: payroll-heavy
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / remainder 1
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: remainder-1
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / remainder 2
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: remainder-2
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / remainder 3
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: remainder-3
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / remainder 4
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: remainder-4
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / remainder 5
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: remainder-5
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / remainder 6
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: remainder-6
           - frappe: version-16
             app: erpnext
             app_branch: version-16
@@ -768,6 +1003,38 @@ jobs:
             artifact: erpnext-bench-v16
             test_group: remainder-6
           - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16 / remainder 7
+            python: '3.14'
+            node: 24
+            artifact: erpnext-bench-v16
+            test_group: remainder-7
+          - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16 / remainder 8
+            python: '3.14'
+            node: 24
+            artifact: erpnext-bench-v16
+            test_group: remainder-8
+          - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16 / remainder 9
+            python: '3.14'
+            node: 24
+            artifact: erpnext-bench-v16
+            test_group: remainder-9
+          - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16 / remainder 10
+            python: '3.14'
+            node: 24
+            artifact: erpnext-bench-v16
+            test_group: remainder-10
+          - frappe: version-16
             app: hrms
             app_branch: version-16
             label: HRMS v16 / leave heavy
@@ -815,6 +1082,22 @@ jobs:
             node: 24
             artifact: hrms-bench-v16
             test_group: remainder-4
+          - frappe: version-16
+            app: hrms
+            app_branch: version-16
+            label: HRMS v16 / remainder 5
+            python: '3.14'
+            node: 24
+            artifact: hrms-bench-v16
+            test_group: remainder-5
+          - frappe: version-16
+            app: hrms
+            app_branch: version-16
+            label: HRMS v16 / remainder 6
+            python: '3.14'
+            node: 24
+            artifact: hrms-bench-v16
+            test_group: remainder-6
     name: PostgreSQL upstream / ${{ matrix.label }}
 
     services:

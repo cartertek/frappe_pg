@@ -39,7 +39,7 @@ ISOLATED_GROUPS = {
     },
 }
 
-REMAINDER_COUNTS = {"erpnext": 6, "hrms": 4}
+REMAINDER_COUNTS = {"erpnext": 10, "hrms": 6}
 
 
 def relative_test_path(app, test_file):
