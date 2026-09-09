@@ -1841,6 +1841,12 @@ def normalize_erpnext_gl_account_currency_grouping(query):
         return query
     if not re.search(r'\bSUM\s*\(\s*"(?:debit|credit)(?:_in_account_currency)?"\s*\)', query, re.IGNORECASE):
         return query
+    if re.search(
+        r'MAX\s*\(\s*"account_currency"\s*\)\s+(?:AS\s+)?"account_currency"',
+        query,
+        re.IGNORECASE,
+    ):
+        return query
     return re.sub(
         r'(?<![A-Za-z0-9_.])"account_currency"(?=\s*(?:,|FROM\b))',
         'MAX("account_currency") AS "account_currency"',
@@ -2032,6 +2038,12 @@ def normalize_erpnext_exchange_revaluation_grouping(query):
     if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
         return query
     for field in ("party_type", "party", "account_currency"):
+        if re.search(
+            rf'MAX\s*\(\s*"{field}"\s*\)\s+(?:AS\s+)?"{field}"',
+            query,
+            re.IGNORECASE,
+        ):
+            continue
         query = re.sub(
             rf'(?<![A-Za-z0-9_.])"{field}"(?=\s*(?:,|FROM\b))',
             f'MAX("{field}") AS "{field}"',

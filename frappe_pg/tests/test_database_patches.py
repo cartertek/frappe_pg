@@ -41,6 +41,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_bom_items_grouping,
     normalize_erpnext_budget_requested_amount,
     normalize_erpnext_deferred_posted_literal,
+    normalize_erpnext_exchange_revaluation_grouping,
     normalize_erpnext_future_journal_payment_grouping,
     normalize_erpnext_irs_1099_grouping,
     normalize_erpnext_item_end_of_life_zero_date,
@@ -188,6 +189,17 @@ class TestQueryTransformers(unittest.TestCase):
         transformed = expand_mysql_having_alias(query)
         self.assertIn('HAVING SUM("amount_in_account_currency") > 0', transformed)
         self.assertNotIn('SUM((SUM(', transformed)
+
+    def test_exchange_revaluation_grouping_is_idempotent_for_account_currency(self):
+        query = (
+            'SELECT "account",MAX("party_type") AS "party_type",MAX("party") AS "party",'
+            'MAX("account_currency") AS "account_currency",SUM("debit") AS "debit" '
+            'FROM "tabGL Entry" GROUP BY "account",NULLIF("party_type",%(param1)s),NULLIF("party",%(param2)s)'
+        )
+        once = normalize_erpnext_exchange_revaluation_grouping(query)
+        twice = normalize_erpnext_exchange_revaluation_grouping(once)
+        self.assertEqual(once, twice)
+        self.assertNotIn('AS MAX(', twice)
 
     def test_mysql_having_unknown_alias_is_unchanged(self):
         query = "SELECT count(*) AS total FROM tabThing HAVING other_alias > 0"
