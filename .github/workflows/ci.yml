@@ -233,7 +233,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.10
+          python-version: '3.10'
 
       - name: Setup Node
         uses: actions/setup-node@v3
@@ -348,7 +348,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.14
+          python-version: '3.14'
 
       - name: Setup Node
         uses: actions/setup-node@v3
@@ -464,7 +464,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.10
+          python-version: '3.10'
 
       - name: Setup Node
         uses: actions/setup-node@v3
@@ -601,7 +601,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.14
+          python-version: '3.14'
 
       - name: Setup Node
         uses: actions/setup-node@v3
@@ -737,7 +737,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.10
+          python-version: '3.10'
       - name: Setup Node
         uses: actions/setup-node@v3
         with:
@@ -818,7 +818,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.14
+          python-version: '3.14'
       - name: Setup Node
         uses: actions/setup-node@v3
         with:
