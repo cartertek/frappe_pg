@@ -25,6 +25,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_double_quoted_literals,
     convert_mysql_inner_join_without_condition,
     convert_mysql_limit_offset,
+    convert_mysql_month,
     convert_mysql_monthname,
     convert_mysql_regexp_operator,
     convert_mysql_show_index,
@@ -33,6 +34,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_zero_date_sentinel,
     convert_numeric_truthiness,
     expand_mysql_having_alias,
+    normalize_erpnext_activation_last_login_timestamp,
     normalize_erpnext_advance_payment_currency_aggregate,
     normalize_erpnext_asset_depreciation_grouping,
     normalize_erpnext_bank_clearance_journal_query,
@@ -54,6 +56,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_reserved_warehouse_distinct,
     normalize_erpnext_serial_ledger_distinct_order,
     normalize_erpnext_stock_ledger_batch_grouping,
+    normalize_erpnext_stock_reconciliation_item_defaults,
     normalize_erpnext_stock_voucher_group_order,
     normalize_erpnext_unreconcile_payment_grouping,
     normalize_erpnext_v15_bom_group_query,
@@ -68,6 +71,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_payment_request_single_match_grouping,
     qualify_frappe_grouped_order_aggregate,
     remove_erpnext_inventory_dimension_default_order,
+    remove_erpnext_item_barcode_default_order,
     remove_index_hints,
     remove_mysql_order_by_null,
     remove_order_by_from_aggregate_only_query,
@@ -668,6 +672,24 @@ WHERE eca.employee_advance=%s AND ec.approval_status="Approved" AND ec.name=eca.
         transformed = normalize_hrms_legacy_string_literals(query)
         self.assertIn("sd.parentfield='earnings'", transformed)
 
+    def test_hrms_employee_reminder_alias_uses_identifier_quotes(self):
+        query = (
+            "SELECT \"personal_email\", \"employee_name\" AS 'name', \"image\" "
+            "FROM \"tabEmployee\" WHERE \"status\"='Active'"
+        )
+        transformed = normalize_hrms_legacy_string_literals(query)
+        self.assertIn('employee_name" AS "name"', transformed)
+        self.assertNotIn("AS 'name'", transformed)
+
+    def test_hrms_benefit_claim_aggregate_alias_uses_identifier_quotes(self):
+        query = (
+            "select sum(claimed_amount) as 'total_amount' "
+            '\nfrom "tabEmployee Benefit Claim" where employee=%(employee)s'
+        )
+        transformed = normalize_hrms_legacy_string_literals(query)
+        self.assertIn('AS "total_amount"', transformed)
+        self.assertNotIn("AS 'total_amount'", transformed)
+
     def test_hrms_staffing_plan_aggregate_adds_group_by(self):
         query = """SELECT DISTINCT spd.parent, sp.from_date as from_date, sp.to_date as to_date, sp.name,
 sum(spd.vacancies) as vacancies, spd.designation
@@ -1178,6 +1200,55 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
             transformed,
             'SELECT "batch_no",SUM("qty") AS "qty" FROM "tabSerial and Batch Entry" GROUP BY "batch_no"',
         )
+
+    def test_batchwise_qty_rebuilds_projection_for_unknown_order_helper_alias(self):
+        query = (
+            'SELECT "batch_no",SUM("qty") AS "qty",MAX("creation") AS "_order_by" '
+            'FROM "tabSerial and Batch Entry" GROUP BY "batch_no" ORDER BY "_order_by" DESC'
+        )
+        self.assertEqual(
+            normalize_erpnext_batchwise_qty_result_shape(query),
+            'SELECT "batch_no",SUM("qty") AS "qty" FROM "tabSerial and Batch Entry" GROUP BY "batch_no"',
+        )
+
+    def test_mysql_month_is_extracted(self):
+        self.assertEqual(
+            convert_mysql_month('SELECT MONTH("expected_closing")'),
+            'SELECT EXTRACT(MONTH FROM "expected_closing")',
+        )
+
+    def test_activation_last_login_text_is_cast_for_timestamp_comparison(self):
+        query = 'select name from "tabUser" where last_login > now() - INTERVAL \'2 day\' limit 1'
+        transformed = normalize_erpnext_activation_last_login_timestamp(query)
+        self.assertIn('CAST("last_login" AS timestamp) > now()', transformed)
+
+    def test_item_barcode_distinct_drops_default_modified_order(self):
+        query = (
+            'SELECT DISTINCT "barcode" FROM "tabItem Barcode" ' 'ORDER BY "tabItem Barcode"."modified" DESC'
+        )
+        self.assertEqual(
+            remove_erpnext_item_barcode_default_order(query),
+            'SELECT DISTINCT "barcode" FROM "tabItem Barcode"',
+        )
+
+    def test_stock_reconciliation_item_defaults_drops_obsolete_grouping(self):
+        query = (
+            'SELECT i.name as item_code, i.item_name, id.default_warehouse as warehouse, i.stock_uom '
+            'FROM "tabItem" i, "tabItem Default" id '
+            'WHERE i.name=id.parent AND id.company=%s GROUP BY i.name'
+        )
+        transformed = normalize_erpnext_stock_reconciliation_item_defaults(query)
+        self.assertNotIn("GROUP BY", transformed)
+        self.assertIn("id.default_warehouse as warehouse", transformed)
+
+    def test_stock_voucher_order_aggregates_creation_tiebreaker(self):
+        query = (
+            'SELECT "voucher_type","voucher_no","posting_date","posting_time","creation" '
+            'FROM "tabStock Ledger Entry" GROUP BY "voucher_type","voucher_no" '
+            'ORDER BY "posting_datetime","creation"'
+        )
+        transformed = normalize_erpnext_stock_voucher_group_order(query)
+        self.assertIn('ORDER BY MIN("posting_datetime"),MIN("creation")', transformed)
 
     def test_pipeline_is_idempotent_for_supported_transformations(self):
         queries = [

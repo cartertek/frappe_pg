@@ -1004,6 +1004,21 @@ def normalize_hrms_legacy_string_literals(query):
             query,
             flags=re.IGNORECASE,
         )
+
+    # Older HRMS raw SQL uses MySQL single-quoted output aliases, for example
+    # employee_name AS 'name' and SUM(...) AS 'total_amount'. PostgreSQL needs
+    # identifier aliases. Keep this constrained to known HRMS table families.
+    if re.search(
+        r'\bFROM\s+"tab(?:Employee|Employee Benefit Claim|Salary Slip|Salary Detail|Expense Claim(?: Advance)?)"',
+        query,
+        re.IGNORECASE,
+    ):
+        query = re.sub(
+            r"\bAS\s+'(?P<alias>[A-Za-z_][A-Za-z0-9_]*)'",
+            lambda match: f'AS "{match.group("alias")}"',
+            query,
+            flags=re.IGNORECASE,
+        )
     return query
 
 
@@ -1337,8 +1352,8 @@ def normalize_erpnext_stock_voucher_group_order(query):
         flags=re.IGNORECASE,
     )
     query = re.sub(
-        r'(?P<comma>,\s*|\s+)ORDER\s+BY\s+(?P<field>(?:"tabStock Ledger Entry"\.)?"?creation"?)',
-        lambda match: f'{match.group("comma")}ORDER BY MIN({match.group("field")})',
+        r'(?P<comma>,\s*)(?P<field>(?:"tabStock Ledger Entry"\.)?"?creation"?)(?=\s*(?:ASC|DESC)?\s*$)',
+        lambda match: f'{match.group("comma")}MIN({match.group("field")})',
         query,
         count=1,
         flags=re.IGNORECASE,
@@ -1877,6 +1892,59 @@ def convert_mysql_monthname(query):
     )
 
 
+def convert_mysql_month(query):
+    """Translate MySQL MONTH(expr) for simple date columns/expressions."""
+    atom = r'(?:"[^"]+"(?:\."[^"]+")?|[A-Za-z_][A-Za-z0-9_$.]*)'
+    return re.sub(
+        rf'\bMONTH\s*\(\s*(?P<expr>{atom})\s*\)',
+        lambda m: f"EXTRACT(MONTH FROM {m.group('expr')})",
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_erpnext_activation_last_login_timestamp(query):
+    """Cast legacy User.last_login text before timestamp comparisons."""
+    if not re.search(r'\bFROM\s+"?tabUser"?\b', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\blast_login\s*>\s*(?:NOW\(\)|CURRENT_TIMESTAMP)', query, re.IGNORECASE):
+        return query
+    return re.sub(
+        r'(?<![A-Za-z0-9_.])"?last_login"?(?=\s*>)',
+        'CAST("last_login" AS timestamp)',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def remove_erpnext_item_barcode_default_order(query):
+    """Drop Frappe's implicit modified ordering from DISTINCT Item Barcode queries."""
+    if not re.search(r'\bSELECT\s+DISTINCT\b', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bFROM\s+"tabItem Barcode"', query, re.IGNORECASE):
+        return query
+    return re.sub(
+        r'\s+ORDER\s+BY\s+"tabItem Barcode"\."modified"\s+DESC\s*$',
+        '',
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_erpnext_stock_reconciliation_item_defaults(query):
+    """Remove the obsolete item-only GROUP BY from legacy stock reconciliation."""
+    required = (
+        r'\bFROM\s+"tabItem"\s+i\s*,\s*"tabItem Default"\s+id\b',
+        r'\bid\.company\s*=',
+        r'\bid\.default_warehouse\s+as\s+warehouse\b',
+        r'\bGROUP\s+BY\s+i\.name\b',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    return re.sub(r'\s+GROUP\s+BY\s+i\.name\b', '', query, count=1, flags=re.IGNORECASE)
+
+
 def normalize_erpnext_deferred_posted_literal(query):
     """Render the deferred-report posted marker as a string literal."""
     if not re.search(r'\bFROM\s+"tab(?:Sales|Purchase) Invoice Item"', query, re.IGNORECASE):
@@ -1956,14 +2024,14 @@ def normalize_erpnext_future_journal_payment_grouping(query):
 
 
 def normalize_erpnext_batchwise_qty_result_shape(query):
-    """Remove Frappe's PostgreSQL-only ordering helper from legacy batch qty rows.
+    """Keep legacy batch-wise quantity rows at their expected two-column shape.
 
-    ERPNext v15 requests exactly ``batch_no`` and ``SUM(qty)`` with ``as_list``
-    and converts each two-cell row into ``frappe._dict``. Frappe v15's PostgreSQL
-    GROUP BY helper appends ``MAX(creation) AS creation`` solely to satisfy the
-    default ORDER BY, changing the public result shape to three cells. Ordering
-    is irrelevant to the dictionary conversion, so remove only that helper and
-    its ORDER BY for this exact grouped Serial and Batch Entry query.
+    ERPNext converts each result row directly into ``frappe._dict`` and therefore
+    requires exactly ``(batch_no, qty)``. Frappe's PostgreSQL GROUP BY compatibility
+    can append an ordering helper column (usually an aggregated creation timestamp),
+    changing the public result shape to three cells. For this exact Serial and Batch
+    Entry query, rebuild the projection and drop ordering entirely; ordering is not
+    observable when the rows are immediately converted into a dictionary.
     """
     required = (
         r'\bFROM\s+"tabSerial and Batch Entry"',
@@ -1972,21 +2040,21 @@ def normalize_erpnext_batchwise_qty_result_shape(query):
     )
     if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
         return query
-    query, count = re.subn(
-        r',\s*MAX\s*\(\s*(?:"tabSerial and Batch Entry"\.)?"?creation"?\s*\)' r'\s+(?:AS\s+)?"?creation"?',
-        '',
-        query,
-        count=1,
-        flags=re.IGNORECASE,
-    )
-    if not count:
+
+    select_match = re.search(r'\bSELECT\b.+?\bFROM\b', query, re.IGNORECASE | re.DOTALL)
+    if not select_match:
         return query
+    rebuilt = (
+        query[: select_match.start()]
+        + 'SELECT "batch_no",SUM("qty") AS "qty" FROM'
+        + query[select_match.end() :]
+    )
     return re.sub(
-        r'\s+ORDER\s+BY\s+"?creation"?(?:\s+(?:ASC|DESC))?',
+        r'\s+ORDER\s+BY\s+.+?(?=(?:\s+LIMIT\s+\d+)?\s*$)',
         '',
-        query,
+        rebuilt,
         count=1,
-        flags=re.IGNORECASE,
+        flags=re.IGNORECASE | re.DOTALL,
     )
 
 
@@ -2451,7 +2519,9 @@ def apply_all_query_transformations(query):
     query = convert_ifnull_to_coalesce(query)
     query = convert_date_format(query)
     query = convert_mysql_monthname(query)
+    query = convert_mysql_month(query)
     query = convert_mysql_date_arithmetic(query)
+    query = normalize_erpnext_activation_last_login_timestamp(query)
     query = convert_mysql_datediff(query)
     query = convert_mysql_show_index(query)
     query = convert_mysql_zero_date_sentinel(query)
@@ -2466,6 +2536,7 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_bom_items_grouping(query)
     query = qualify_frappe_grouped_order_aggregate(query)
     query = remove_erpnext_inventory_dimension_default_order(query)
+    query = remove_erpnext_item_barcode_default_order(query)
     query = convert_numeric_truthiness(query)
     query = convert_mysql_double_quoted_literals(query)
     query = convert_mysql_case_value_literals(query)
@@ -2498,6 +2569,7 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_budget_requested_amount(query)
     query = normalize_erpnext_batch_availability_grouping(query)
     query = normalize_erpnext_batchwise_qty_result_shape(query)
+    query = normalize_erpnext_stock_reconciliation_item_defaults(query)
     query = normalize_erpnext_serial_ledger_distinct_order(query)
     query = normalize_erpnext_stock_ledger_batch_grouping(query)
     query = normalize_erpnext_unreconcile_payment_grouping(query)
