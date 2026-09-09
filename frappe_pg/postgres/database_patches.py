@@ -10,6 +10,7 @@ tracing, execution, and error handling under Frappe's control.
 
 import json
 import re
+from datetime import time as datetime_time, timedelta
 
 import frappe
 from frappe.database.postgres.database import PostgresDatabase
@@ -23,6 +24,7 @@ _original_is_deadlocked = None
 _patches_applied = False
 
 _JSON_TYPE_OIDS = {114, 3802}
+_TIME_TYPE_OID = 1083
 
 
 def _normalize_zero_timestamp_params(query, values):
@@ -79,10 +81,42 @@ def _serialize_json_cells(result, description):
     )
 
 
+def _normalize_time_cells(result, description):
+    """Expose PostgreSQL TIME cells using MariaDB/PyMySQL's timedelta contract.
+
+    Frappe application code treats Time fields as durations and performs
+    arithmetic such as ``datetime + value`` and ``value + timedelta``. PyMySQL
+    returns SQL TIME as ``timedelta`` while psycopg2 returns ``datetime.time``.
+    Normalize only columns whose cursor OID is PostgreSQL TIME (1083).
+    """
+    if not result or not description:
+        return result
+
+    time_columns = {index for index, column in enumerate(description) if column.type_code == _TIME_TYPE_OID}
+    if not time_columns:
+        return result
+
+    def as_timedelta(value):
+        if not isinstance(value, datetime_time):
+            return value
+        return timedelta(
+            hours=value.hour,
+            minutes=value.minute,
+            seconds=value.second,
+            microseconds=value.microsecond,
+        )
+
+    return tuple(
+        tuple(as_timedelta(value) if index in time_columns else value for index, value in enumerate(row))
+        for row in result
+    )
+
+
 def patched_transform_result(self, result):
-    """Serialize only JSON/JSONB result cells after Frappe's native transform."""
+    """Normalize PostgreSQL result types to Frappe's MariaDB-facing contracts."""
     result = _original_transform_result(self, result)
-    return _serialize_json_cells(result, self._cursor.description)
+    result = _serialize_json_cells(result, self._cursor.description)
+    return _normalize_time_cells(result, self._cursor.description)
 
 
 def patched_is_deadlocked(exc):

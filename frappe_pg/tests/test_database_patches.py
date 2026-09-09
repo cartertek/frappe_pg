@@ -1,4 +1,5 @@
 import inspect
+from datetime import time as datetime_time, timedelta
 import unittest
 from unittest.mock import Mock, patch
 
@@ -7,6 +8,7 @@ from frappe.database.postgres.database import PostgresDatabase, modify_query
 from frappe.database.utils import EmptyQueryValues
 
 from frappe_pg.postgres import database_patches
+from frappe_pg.postgres.database_patches import _normalize_time_cells
 from frappe_pg.postgres.query_transformers import (
     apply_all_query_transformations,
     cast_timestamp_pattern_matches,
@@ -37,6 +39,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_negative_invoice_voucher_literal,
     normalize_erpnext_production_plan_subitems_grouping,
     normalize_erpnext_repost_item_grouping,
+    normalize_erpnext_irs_1099_grouping,
     normalize_erpnext_work_order_return_grouping,
     normalize_erpnext_asset_depreciation_grouping,
     normalize_erpnext_reserved_warehouse_distinct,
@@ -57,6 +60,20 @@ from frappe_pg.postgres.query_transformers import (
     remove_mysql_order_by_null,
     remove_order_by_from_aggregate_only_query,
 )
+
+
+class TestPostgresResultCompatibility(unittest.TestCase):
+    def test_time_cells_match_mariadb_timedelta_contract(self):
+        description = [Mock(type_code=1083), Mock(type_code=25)]
+        rows = [(datetime_time(8, 30, 15, 250000), "unchanged")]
+        self.assertEqual(
+            _normalize_time_cells(rows, description),
+            ((timedelta(hours=8, minutes=30, seconds=15, microseconds=250000), "unchanged"),),
+        )
+
+    def test_non_time_cells_are_untouched(self):
+        rows = [(datetime_time(8, 30),)]
+        self.assertEqual(_normalize_time_cells(rows, [Mock(type_code=25)]), rows)
 
 
 class TestQueryTransformers(unittest.TestCase):
@@ -731,6 +748,14 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
             convert_mysql_timestamp_pair('SELECT TIMESTAMP("posting_date") FROM t'),
             'SELECT TIMESTAMP("posting_date") FROM t',
         )
+        self.assertEqual(
+            convert_mysql_timestamp_pair("SELECT timestamp(%s, %s)"),
+            "SELECT (%s + %s)",
+        )
+        self.assertEqual(
+            convert_mysql_timestamp_pair("SELECT timestamp(%(date)s, %(time)s)"),
+            "SELECT (%(date)s + %(time)s)",
+        )
 
     def test_work_order_return_grouping_includes_original_item(self):
         query = (
@@ -744,6 +769,21 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
             'GROUP BY "tabStock Entry Detail"."item_code","tabStock Entry Detail"."original_item"',
             transformed,
         )
+        quoted_return = query.replace('"is_return"=1', '"is_return"=\'1\'')
+        transformed = normalize_erpnext_work_order_return_grouping(quoted_return)
+        self.assertIn(
+            'GROUP BY "tabStock Entry Detail"."item_code","tabStock Entry Detail"."original_item"',
+            transformed,
+        )
+
+    def test_erpnext_irs_1099_grouping_matches_develop(self):
+        query = (
+            'SELECT s.supplier_group, gl.party, s.tax_id, SUM(gl.debit_in_account_currency) '
+            'FROM "tabGL Entry" gl CROSS JOIN "tabSupplier" s WHERE s.name=gl.party '
+            'GROUP BY gl.party ORDER BY gl.party DESC'
+        )
+        transformed = normalize_erpnext_irs_1099_grouping(query)
+        self.assertIn('GROUP BY gl.party, s.supplier_group, s.tax_id', transformed)
 
     def test_asset_depreciation_grouping_includes_asset_dimensions(self):
         query = (
