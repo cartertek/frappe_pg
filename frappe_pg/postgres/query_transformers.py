@@ -1168,6 +1168,12 @@ def normalize_erpnext_repost_item_fields_grouping(query):
     if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
         return query
     for field in ("posting_date", "posting_time", "creation", "posting_datetime"):
+        if re.search(
+            rf'MIN\s*\(\s*"{field}"\s*\)\s+(?:AS\s+)?"{field}"',
+            query,
+            re.IGNORECASE,
+        ):
+            continue
         query = re.sub(
             rf'(?<![A-Za-z0-9_.])"?{field}"?(?=\s*(?:,|FROM\b))',
             f'MIN("{field}") AS "{field}"',
@@ -1365,6 +1371,12 @@ def normalize_erpnext_repost_item_grouping(query):
     if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
         return query
     for field in ("posting_date", "posting_time", "creation", "posting_datetime"):
+        if re.search(
+            rf'MIN\s*\(\s*(?:"tabStock Ledger Entry"\.)?"{field}"\s*\)\s+(?:AS\s+)?"{field}"',
+            query,
+            re.IGNORECASE,
+        ):
+            continue
         pattern = re.compile(
             rf'(?<![A-Za-z0-9_])(?P<field>(?:"tabStock Ledger Entry"\.)?"{field}")'
             rf'(?=\s*(?:,|\s+FROM\b))',

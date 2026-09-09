@@ -190,6 +190,18 @@ class TestQueryTransformers(unittest.TestCase):
         self.assertIn('HAVING SUM("amount_in_account_currency") > 0', transformed)
         self.assertNotIn('SUM((SUM(', transformed)
 
+    def test_repost_item_grouping_is_idempotent(self):
+        query = (
+            'select "item_code", "warehouse", MIN("posting_date") AS "posting_date", '
+            'MIN("posting_time") AS "posting_time", MIN("creation") AS "creation", '
+            'MIN("posting_datetime") AS "posting_datetime" from "tabStock Ledger Entry" '
+            'group by item_code, warehouse order by creation asc'
+        )
+        once = normalize_erpnext_repost_item_fields_grouping(query)
+        twice = normalize_erpnext_repost_item_fields_grouping(once)
+        self.assertEqual(once, twice)
+        self.assertNotIn('AS MIN(', twice)
+
     def test_exchange_revaluation_grouping_is_idempotent_for_account_currency(self):
         query = (
             'SELECT "account",MAX("party_type") AS "party_type",MAX("party") AS "party",'
