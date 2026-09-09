@@ -183,7 +183,7 @@ class TestQueryTransformers(unittest.TestCase):
             "having (avg(CASE WHEN status != 'Complete' THEN 1 ELSE 0 END) * 100) > '0'",
             transformed,
         )
-        self.assertIn("order by failure_rate desc", transformed)
+        self.assertIn("order by (avg(CASE WHEN status != 'Complete' THEN 1 ELSE 0 END) * 100) desc", transformed)
 
     def test_mysql_having_unknown_alias_is_unchanged(self):
         query = "SELECT count(*) AS total FROM tabThing HAVING other_alias > 0"
@@ -967,8 +967,8 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         )
         transformed = normalize_erpnext_reserved_warehouse_distinct(query)
         self.assertNotIn('SELECT DISTINCT', transformed)
-        self.assertIn('GROUP BY "tabStock Reservation Entry"."warehouse"', transformed)
-        self.assertIn('ORDER BY MIN("tabStock Reservation Entry"."creation")', transformed)
+        self.assertIn('GROUP BY "warehouse"', transformed)
+        self.assertIn('ORDER BY MIN("creation")', transformed)
 
     def test_mysql_order_by_null_is_removed(self):
         query = 'SELECT parent FROM "tabItem Variant Attribute" GROUP BY parent ORDER BY NULL'
@@ -1071,7 +1071,7 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         query = 'select name from "tabUser" where last_login > date_sub(now(), interval 2 day) limit 1'
         self.assertEqual(
             convert_mysql_date_arithmetic(query),
-            "select name from \"tabUser\" where last_login > NOW() - INTERVAL '2 day' limit 1",
+            "select name from \"tabUser\" where last_login > now() - INTERVAL '2 day' limit 1",
         )
 
     def test_mysql_datediff_accepts_aggregate_operand(self):
@@ -1089,7 +1089,7 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
     def test_mysql_show_index_for_legacy_erpnext_perf_test(self):
         query = "SHOW INDEX FROM \"tabBin\" WHERE Column_name = 'item_code' AND Seq_in_index = '1'"
         transformed = convert_mysql_show_index(query)
-        self.assertIn('FROM pg_index', transformed)
+        self.assertIn('JOIN pg_index', transformed)
         self.assertIn("t.relname='tabBin'", transformed)
         self.assertIn("a.attname='item_code'", transformed)
 

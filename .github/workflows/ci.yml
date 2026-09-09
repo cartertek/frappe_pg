@@ -512,6 +512,7 @@ jobs:
           pip install frappe-bench
 
       - name: Restore Frappe PostgreSQL database
+        working-directory: /home/runner/frappe-bench
         env:
           PGPASSWORD: root
         run: |
@@ -655,6 +656,7 @@ jobs:
           pip install frappe-bench
 
       - name: Restore Frappe PostgreSQL database
+        working-directory: /home/runner/frappe-bench
         env:
           PGPASSWORD: root
         run: |
