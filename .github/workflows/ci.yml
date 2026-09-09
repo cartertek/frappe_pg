@@ -582,11 +582,6 @@ jobs:
           bench --site test_site set-config mail_login "test@example.com"
           bench --site test_site set-config mail_password test
           bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
-          # HRMS must start from an installed ERPNext database before ERPNext's
-          # import-time test bootstrap has populated master test records.  Keep
-          # this snapshot alongside the prewarmed ERPNext-test snapshot so the
-          # expensive ERPNext installation still happens only once.
-          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/erpnext_base.dump"
           cd sites
           ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext
           cd ..
@@ -602,7 +597,6 @@ jobs:
           name: ${{ matrix.artifact }}
           path: |
             ${{ runner.temp }}/frappe-bench.tar
-            ${{ runner.temp }}/erpnext_base.dump
             ${{ runner.temp }}/test_frappe.dump
           compression-level: 6
           retention-days: 1
@@ -740,11 +734,6 @@ jobs:
           bench --site test_site set-config mail_login "test@example.com"
           bench --site test_site set-config mail_password test
           bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
-          # HRMS must start from an installed ERPNext database before ERPNext's
-          # import-time test bootstrap has populated master test records.  Keep
-          # this snapshot alongside the prewarmed ERPNext-test snapshot so the
-          # expensive ERPNext installation still happens only once.
-          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/erpnext_base.dump"
           cd sites
           ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext
           cd ..
@@ -760,7 +749,6 @@ jobs:
           name: ${{ matrix.artifact }}
           path: |
             ${{ runner.temp }}/frappe-bench.tar
-            ${{ runner.temp }}/erpnext_base.dump
             ${{ runner.temp }}/test_frappe.dump
           compression-level: 6
           retention-days: 1
@@ -830,7 +818,7 @@ jobs:
           CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
           CREATE DATABASE test_frappe OWNER test_frappe;
           SQL
-          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/erpnext_base.dump"
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
       - name: Add HRMS to reusable fixture
         working-directory: /home/runner/frappe-bench
         env:
@@ -921,7 +909,7 @@ jobs:
           CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
           CREATE DATABASE test_frappe OWNER test_frappe;
           SQL
-          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/erpnext_base.dump"
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
       - name: Add HRMS to reusable fixture
         working-directory: /home/runner/frappe-bench
         env:

@@ -32,6 +32,15 @@ def main():
         print(f"Running global test setup hook: {fn}")
         frappe.get_attr(fn)()
 
+    if args.app == "erpnext":
+        # ERPNext's CI intentionally imports this module once to instantiate
+        # BootStrapTestData.  It normalizes/creates master test records that
+        # downstream ERPNext and HRMS tests expect.  The old lightmode runner
+        # invocation reported 0 tests because these are import side effects,
+        # not unittest cases.
+        print("Running ERPNext bootstrap test data setup")
+        frappe.get_module("erpnext.tests.bootstrap_test_data")
+
     test_module = frappe.get_module(f"{args.app}.tests")
     for doctype in getattr(test_module, "global_test_dependencies", ()):
         print(f"Creating global test dependency: {doctype}")
