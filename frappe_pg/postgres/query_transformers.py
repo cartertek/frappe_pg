@@ -424,6 +424,21 @@ def normalize_hrms_employee_event_date_parts(query):
     )
 
 
+def normalize_hrms_work_anniversary_date_projection(query):
+    """Backport HRMS v16's date_of_joining projection to the v15 PostgreSQL reminder query."""
+    if not re.search(r'\bFROM\s+"tabEmployee"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'DATE_PART\s*\(\s*\'day\'\s*,\s*date_of_joining\s*\)', query, re.IGNORECASE):
+        return query
+    select_match = re.search(r'\bSELECT\b(?P<select>.+?)\bFROM\b', query, re.IGNORECASE | re.DOTALL)
+    if not select_match or re.search(
+        r'(?<![A-Za-z0-9_])"?date_of_joining"?(?![A-Za-z0-9_])', select_match.group("select"), re.IGNORECASE
+    ):
+        return query
+    replacement = select_match.group(0)[:-4].rstrip() + ', "date_of_joining" FROM'
+    return query[: select_match.start()] + replacement + query[select_match.end() :]
+
+
 def normalize_hrms_staffing_plan_aggregate(query):
     """Group HRMS's legacy staffing-plan aggregate by every projected dimension."""
     required = (
@@ -617,6 +632,7 @@ def apply_all_query_transformations(query):
     query = convert_mysql_double_quoted_literals(query)
     query = normalize_hrms_legacy_string_literals(query)
     query = normalize_hrms_employee_event_date_parts(query)
+    query = normalize_hrms_work_anniversary_date_projection(query)
     query = normalize_hrms_staffing_plan_aggregate(query)
     query = normalize_hrms_income_tax_salary_slip_grouping(query)
     query = normalize_hrms_shift_assignment_empty_end_date(query)

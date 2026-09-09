@@ -21,6 +21,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_hrms_shift_attendance_grouping,
     normalize_hrms_skill_assessment_group_order,
     normalize_hrms_staffing_plan_aggregate,
+    normalize_hrms_work_anniversary_date_projection,
     remove_index_hints,
 )
 
@@ -157,6 +158,16 @@ WHERE eca.employee_advance=%s AND ec.approval_status="Approved" AND ec.name=eca.
         )
         transformed = normalize_hrms_employee_event_date_parts(query)
         self.assertEqual(transformed.count('CAST(%(today)s AS date)'), 3)
+
+    def test_hrms_work_anniversary_projects_date_of_joining(self):
+        query = (
+            'SELECT "personal_email", "company", "company_email", "user_id", '
+            '"employee_name" AS "name", "image" FROM "tabEmployee" WHERE '
+            "DATE_PART('day', date_of_joining) = date_part('day', %(today)s)"
+        )
+        transformed = normalize_hrms_work_anniversary_date_projection(query)
+        self.assertIn('"image", "date_of_joining" FROM "tabEmployee"', transformed)
+        self.assertEqual(normalize_hrms_work_anniversary_date_projection(transformed), transformed)
 
     def test_hrms_staffing_plan_aggregate_adds_group_by(self):
         query = """SELECT DISTINCT spd.parent, sp.from_date as from_date, sp.to_date as to_date, sp.name,
