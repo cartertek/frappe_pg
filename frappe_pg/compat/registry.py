@@ -36,6 +36,7 @@ _COMPATIBILITY_OVERRIDES = (
     batch_valuation_lock,
     batch_valuation_advisory_lock,
     future_stock_voucher_lock,
+    pick_list_lock,
     stock_reservation_lock,
 )
 
