@@ -1962,9 +1962,19 @@ def normalize_erpnext_activation_last_login_timestamp(query):
         return query
     return re.sub(
         r'(?<![A-Za-z0-9_.])"?last_login"?(?=\s*>)',
-        'CAST("last_login" AS timestamp)',
+        "CAST(NULLIF(\"last_login\", '') AS timestamp)",
         query,
         count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_erpnext_batch_empty_expiry_date(query):
+    """Treat ERPNext's legacy empty Batch.expiry_date sentinel as NULL."""
+    return re.sub(
+        r'(?P<field>(?:"tabBatch"\.)?"expiry_date")\s*=\s*\'\'',
+        r'\g<field> IS NULL',
+        query,
         flags=re.IGNORECASE,
     )
 
@@ -2207,7 +2217,7 @@ def normalize_erpnext_sales_pipeline_grouping(query):
     """Backport the grouped field selection used by current Sales Pipeline Analytics."""
     if not re.search(r'\bFROM\s+"tabOpportunity"', query, re.IGNORECASE):
         return query
-    if not re.search(r'COUNT\s*\(\s*\*\s*\)', query, re.IGNORECASE):
+    if not re.search(r'COUNT\s*\(\s*(?:\*|\"?name\"?)\s*\)', query, re.IGNORECASE):
         return query
     group = re.search(
         r'(?P<prefix>\bGROUP\s+BY\s+)(?P<keys>.+?)(?=\s+ORDER\s+BY\b|\s*$)',
@@ -2218,7 +2228,7 @@ def normalize_erpnext_sales_pipeline_grouping(query):
         return query
     query = re.sub(r'(?P<select>\bSELECT\s+)"name"\s*,', r'\g<select>', query, count=1, flags=re.IGNORECASE)
     duration = re.search(
-        r'(?P<expr>(?:TO_CHAR|to_char)\s*\(\s*"expected_closing"\s*,\s*(?:%\([^)]+\)s|\'[^\']+\')\s*\))'
+        r'(?P<expr>(?:TO_CHAR|to_char)\s*\(\s*"?expected_closing"?\s*,\s*(?:%\([^)]+\)s|\'[^\']+\')\s*\))'
         r'\s+(?:AS\s+)?"?(?:month|quarter)"?',
         query,
         re.IGNORECASE,
@@ -2232,6 +2242,49 @@ def normalize_erpnext_sales_pipeline_grouping(query):
         )
         query = query[: group.end("keys")] + ',' + duration.group("expr") + query[group.end("keys") :]
     return query
+
+
+def remove_distinct_unselected_default_order(query):
+    """Drop implicit modified/creation ordering from DISTINCT queries when unselected."""
+    if not re.search(r'\bSELECT\s+DISTINCT\b', query, re.IGNORECASE):
+        return query
+    select_match = re.search(
+        r'\bSELECT\s+DISTINCT\b(?P<select>.+?)\bFROM\b', query, re.IGNORECASE | re.DOTALL
+    )
+    if not select_match:
+        return query
+    selected = select_match.group("select").lower()
+    order = re.search(
+        r'\s+ORDER\s+BY\s+(?P<field>(?:"[^"]+"\.)?"?(?:modified|creation)"?)(?:\s+(?:ASC|DESC))?\s*$',
+        query,
+        re.IGNORECASE,
+    )
+    if not order:
+        return query
+    field_name = order.group("field").split(".")[-1].replace('"', '').lower()
+    if re.search(rf'(?<![A-Za-z0-9_])"?{field_name}"?(?![A-Za-z0-9_])', selected, re.IGNORECASE):
+        return query
+    return query[: order.start()].rstrip()
+
+
+def normalize_erpnext_stock_ledger_grouped_posting_date(query):
+    """Aggregate functionally-dependent posting_date in grouped SLE report queries."""
+    if not re.search(r'\bFROM\s+"tabStock Ledger Entry"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'SUM\s*\(\s*(?:"tabStock Ledger Entry"\.)?"?actual_qty"?\s*\)', query, re.IGNORECASE):
+        return query
+    group = re.search(
+        r'\bGROUP\s+BY\s+(?P<keys>.+?)(?=\s+HAVING\b|\s+ORDER\s+BY\b|\s*$)', query, re.IGNORECASE | re.DOTALL
+    )
+    if not group or 'posting_date' in group.group('keys').lower():
+        return query
+    return re.sub(
+        r'(?<![A-Za-z0-9_])(?P<field>(?:"tabStock Ledger Entry"\.)?"?posting_date"?)(?=\s*(?:,|FROM\b))',
+        r'MAX(\g<field>) AS "posting_date"',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
 
 
 def normalize_erpnext_item_query_table_references(query):
@@ -2575,6 +2628,7 @@ def apply_all_query_transformations(query):
     query = convert_mysql_month(query)
     query = convert_mysql_date_arithmetic(query)
     query = normalize_erpnext_activation_last_login_timestamp(query)
+    query = normalize_erpnext_batch_empty_expiry_date(query)
     query = convert_mysql_datediff(query)
     query = convert_mysql_show_index(query)
     query = convert_mysql_zero_date_sentinel(query)
@@ -2633,6 +2687,8 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_budget_child_rate(query)
     query = normalize_erpnext_grouped_for_update(query)
     query = normalize_erpnext_sales_pipeline_grouping(query)
+    query = remove_distinct_unselected_default_order(query)
+    query = normalize_erpnext_stock_ledger_grouped_posting_date(query)
     query = normalize_erpnext_item_query_table_references(query)
     query = normalize_erpnext_bom_valuation_division(query)
     query = normalize_frappe_user_name_casefold(query)
