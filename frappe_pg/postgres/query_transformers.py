@@ -1317,11 +1317,69 @@ def convert_mysql_timestamp_pair(query):
     return pattern.sub(lambda match: f'({match.group("date")} + {match.group("time")})', query)
 
 
+
+def normalize_erpnext_work_order_return_grouping(query):
+    """Group Work Order returned materials by both item and original item.
+
+    Older ERPNext selects ``Stock Entry Detail.original_item`` while grouping
+    only by ``item_code`` for returned manufacturing transfers. ``original_item``
+    participates in the result key, so grouping by it preserves the intended
+    per-item/per-original-item rows while making the query PostgreSQL-valid.
+    """
+    required = (
+        r'\bFROM\s+"tabStock Entry"',
+        r'\bJOIN\s+"tabStock Entry Detail"',
+        r'"tabStock Entry Detail"\."original_item"',
+        r'SUM\s*\(\s*"tabStock Entry Detail"\."transfer_qty"',
+        r'"tabStock Entry"\."is_return"\s*=\s*1',
+        r'GROUP\s+BY\s+"tabStock Entry Detail"\."item_code"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    return re.sub(
+        r'(GROUP\s+BY\s+"tabStock Entry Detail"\."item_code")(?!\s*,)',
+        r'\1,"tabStock Entry Detail"."original_item"',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_erpnext_asset_depreciation_grouping(query):
+    """Include one-to-one Asset dimensions in grouped depreciation lookup."""
+    required = (
+        r'FROM\s+"tabAsset Depreciation Schedule"',
+        r'JOIN\s+"tabAsset"',
+        r'JOIN\s+"tabDepreciation Schedule"',
+        r'MIN\s*\(\s*"tabDepreciation Schedule"\."idx"',
+        r'MAX\s*\(\s*"tabDepreciation Schedule"\."idx"',
+        r'GROUP\s+BY\s+"tabAsset Depreciation Schedule"\."name"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    select_match = re.search(r'\bSELECT\b(?P<select>.+?)\bFROM\b', query, re.IGNORECASE | re.DOTALL)
+    if not select_match:
+        return query
+    dimensions = []
+    for field in ("name", "asset_category", "company"):
+        token = f'"tabAsset"."{field}"'
+        if token in select_match.group("select"):
+            dimensions.append(token)
+    if not dimensions:
+        return query
+    return re.sub(
+        r'(GROUP\s+BY\s+"tabAsset Depreciation Schedule"\."name")(?!\s*,)',
+        lambda match: match.group(1) + "," + ",".join(dimensions),
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
 def normalize_erpnext_repost_item_grouping(query):
     """Backport ERPNext's PostgreSQL-safe grouped Stock Ledger projection."""
     required = (
         r'\bFROM\s+"tabStock Ledger Entry"',
-        r'\bGROUP\s+BY\s+"?item_code"?\s*,\s*"?warehouse"?',
+        r'\bGROUP\s+BY\s+(?:"tabStock Ledger Entry"\.)?"?item_code"?\s*,\s*(?:"tabStock Ledger Entry"\.)?"?warehouse"?',
         r'\bORDER\s+BY\s+(?:"tabStock Ledger Entry"\.)?"?creation"?\s+ASC',
     )
     if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
@@ -1605,6 +1663,27 @@ def convert_mysql_limit_offset(query):
     )
 
 
+
+def convert_erpnext_modified_timediff(query):
+    """Translate ERPNext v15/v16 modified-date TIMEDIFF checks.
+
+    Material Request and Sales Order use ``SELECT TIMEDIFF(a, b)`` only to
+    detect whether two modification timestamps differ. PostgreSQL has no
+    TIMEDIFF function; timestamp subtraction returns an interval with the same
+    zero/non-zero truth needed by those callers. Cast both operands because
+    DB-API placeholders and quoted literals otherwise have unknown type.
+    """
+    match = re.fullmatch(
+        r"\s*SELECT\s+TIMEDIFF\(\s*(?P<left>.+?)\s*,\s*(?P<right>.+?)\s*\)\s*;?\s*",
+        query,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return query
+    left = match.group("left")
+    right = match.group("right")
+    return f"SELECT (CAST({left} AS timestamp) - CAST({right} AS timestamp))"
+
 def convert_mysql_update_join(query):
     """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
 
@@ -1709,6 +1788,8 @@ def apply_all_query_transformations(query):
     query = convert_erpnext_customer_suffix_unsigned(query)
     query = normalize_erpnext_advance_payment_currency_aggregate(query)
     query = normalize_erpnext_stock_voucher_group_order(query)
+    query = normalize_erpnext_work_order_return_grouping(query)
+    query = normalize_erpnext_asset_depreciation_grouping(query)
     query = normalize_erpnext_repost_item_grouping(query)
     query = normalize_erpnext_mode_of_payment_grouping(query)
     query = normalize_erpnext_landed_cost_center_aggregate(query)
@@ -1718,6 +1799,7 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_stock_ledger_batch_grouping(query)
     query = normalize_erpnext_unreconcile_payment_grouping(query)
     query = normalize_erpnext_reserved_warehouse_distinct(query)
+    query = convert_erpnext_modified_timediff(query)
     query = convert_mysql_update_join(query)
 
     # Debug: Log if IF() is still present after transformation

@@ -17,6 +17,7 @@ from frappe_pg.postgres.query_transformers import (
     convert_mysql_date_arithmetic,
     convert_mysql_datediff,
     convert_mysql_double_quoted_literals,
+    convert_erpnext_modified_timediff,
     convert_mysql_inner_join_without_condition,
     convert_mysql_limit_offset,
     convert_mysql_regexp_operator,
@@ -36,6 +37,8 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_negative_invoice_voucher_literal,
     normalize_erpnext_production_plan_subitems_grouping,
     normalize_erpnext_repost_item_grouping,
+    normalize_erpnext_work_order_return_grouping,
+    normalize_erpnext_asset_depreciation_grouping,
     normalize_erpnext_reserved_warehouse_distinct,
     normalize_erpnext_serial_ledger_distinct_order,
     normalize_erpnext_stock_ledger_batch_grouping,
@@ -729,6 +732,34 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
             'SELECT TIMESTAMP("posting_date") FROM t',
         )
 
+    def test_work_order_return_grouping_includes_original_item(self):
+        query = (
+            'SELECT "tabStock Entry Detail"."item_code","tabStock Entry Detail"."original_item",'
+            'SUM("tabStock Entry Detail"."transfer_qty") "qty" FROM "tabStock Entry" '
+            'JOIN "tabStock Entry Detail" ON "tabStock Entry Detail"."parent"="tabStock Entry"."name" '
+            'WHERE "tabStock Entry"."is_return"=1 GROUP BY "tabStock Entry Detail"."item_code"'
+        )
+        transformed = normalize_erpnext_work_order_return_grouping(query)
+        self.assertIn(
+            'GROUP BY "tabStock Entry Detail"."item_code","tabStock Entry Detail"."original_item"',
+            transformed,
+        )
+
+    def test_asset_depreciation_grouping_includes_asset_dimensions(self):
+        query = (
+            'SELECT "tabAsset Depreciation Schedule"."name","tabAsset"."name",'
+            '"tabAsset"."asset_category","tabAsset"."company",'
+            'MIN("tabDepreciation Schedule"."idx")-1,MAX("tabDepreciation Schedule"."idx") '
+            'FROM "tabAsset Depreciation Schedule" JOIN "tabAsset" ON '
+            '"tabAsset Depreciation Schedule"."asset"="tabAsset"."name" '
+            'JOIN "tabDepreciation Schedule" ON "tabAsset Depreciation Schedule"."name"='
+            '"tabDepreciation Schedule"."parent" GROUP BY "tabAsset Depreciation Schedule"."name"'
+        )
+        transformed = normalize_erpnext_asset_depreciation_grouping(query)
+        self.assertIn('"tabAsset"."name"', transformed.rsplit('GROUP BY', 1)[1])
+        self.assertIn('"tabAsset"."asset_category"', transformed.rsplit('GROUP BY', 1)[1])
+        self.assertIn('"tabAsset"."company"', transformed.rsplit('GROUP BY', 1)[1])
+
     def test_erpnext_repost_item_grouping_matches_develop(self):
         query = (
             'SELECT "item_code","warehouse","posting_date","posting_time","creation","posting_datetime" '
@@ -905,6 +936,24 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
             convert_mysql_limit_offset('SELECT name FROM t LIMIT 10, 20'),
             'SELECT name FROM t LIMIT 20 OFFSET 10',
         )
+
+    def test_erpnext_modified_timediff_is_timestamp_subtraction(self):
+        cases = {
+            "select TIMEDIFF(%s, %s)": (
+                "SELECT (CAST(%s AS timestamp) - CAST(%s AS timestamp))"
+            ),
+            "select TIMEDIFF('2026-09-08 12:00:01', '2026-09-08 12:00:00')": (
+                "SELECT (CAST('2026-09-08 12:00:01' AS timestamp) - "
+                "CAST('2026-09-08 12:00:00' AS timestamp))"
+            ),
+        }
+        for query, expected in cases.items():
+            with self.subTest(query=query):
+                self.assertEqual(convert_erpnext_modified_timediff(query), expected)
+
+    def test_timediff_transform_is_limited_to_erpnext_select_shape(self):
+        query = "SELECT name, TIMEDIFF(end_time, start_time) FROM tabExample"
+        self.assertEqual(convert_erpnext_modified_timediff(query), query)
 
     def test_simple_mysql_update_join(self):
         query = (
