@@ -54,9 +54,12 @@ def is_needed():
     )
 
 
-def _document_has_unique_fields(doc):
-    return getattr(doc, "doctype", None) in _DATABASE_UNIQUE_DOCTYPES or any(
-        getattr(field, "unique", False) for field in doc.meta.fields
+def _document_needs_savepoint(doc):
+    """Return whether an insert can hit an expected uniqueness retry path."""
+    return (
+        getattr(doc, "doctype", None) in _DATABASE_UNIQUE_DOCTYPES
+        or getattr(getattr(doc, "meta", None), "autoname", None) == "hash"
+        or any(getattr(field, "unique", False) for field in getattr(getattr(doc, "meta", None), "fields", ()))
     )
 
 
@@ -73,11 +76,22 @@ def apply():
     def compatible_db_insert(self, *args, **kwargs):
         import frappe
 
-        if getattr(frappe.db, "db_type", None) != "postgres" or not _document_has_unique_fields(self):
+        if getattr(frappe.db, "db_type", None) != "postgres" or not _document_needs_savepoint(self):
             return _original_db_insert(self, *args, **kwargs)
+
+        # Frappe retries ``autoname == "hash"`` primary-key collisions from
+        # inside db_insert() by clearing ``name`` and recursively calling
+        # ``self.db_insert()``. PostgreSQL has already marked the transaction
+        # failed at that point, so the recursive wrapper must restore the
+        # active savepoint before Frappe can generate and insert the new hash.
+        retry_save_point = getattr(self, "_frappe_pg_insert_savepoint", None)
+        if retry_save_point:
+            frappe.db.rollback(save_point=retry_save_point)
 
         save_point = f"frappe_pg_unique_{uuid.uuid4().hex}"
         frappe.db.savepoint(save_point)
+        previous_save_point = retry_save_point
+        self._frappe_pg_insert_savepoint = save_point
         try:
             result = _original_db_insert(self, *args, **kwargs)
         except Exception:
@@ -86,6 +100,14 @@ def apply():
         else:
             frappe.db.release_savepoint(save_point)
             return result
+        finally:
+            if previous_save_point:
+                self._frappe_pg_insert_savepoint = previous_save_point
+            else:
+                try:
+                    delattr(self, "_frappe_pg_insert_savepoint")
+                except AttributeError:
+                    pass
 
     _patched_db_insert = compatible_db_insert
     document.db_insert = compatible_db_insert  # nosemgrep

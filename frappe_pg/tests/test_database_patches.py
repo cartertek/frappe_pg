@@ -190,7 +190,7 @@ class TestQueryTransformers(unittest.TestCase):
         )
 
     def test_asset_empty_disposal_date_is_null(self):
-        query = '("tabAsset"."disposal_date" is NULL OR "tabAsset"."disposal_date" = )'
+        query = "(\"tabAsset\".\"disposal_date\" is NULL OR \"tabAsset\".\"disposal_date\" = '')"
         transformed = normalize_erpnext_asset_empty_disposal_date(query)
         self.assertEqual(
             transformed,
