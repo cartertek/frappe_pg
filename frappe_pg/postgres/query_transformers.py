@@ -301,6 +301,53 @@ def convert_date_format(query):
 _QUOTED_IDENTIFIER = r'"(?:[^"]|"")+"(?:\."(?:[^"]|"")+")*'
 
 
+def normalize_postgres_automatic_index_name(query):
+    """Namespace Frappe's automatic single-column index names by table on PostgreSQL.
+
+    MariaDB index names are table-scoped. PostgreSQL index names are schema-scoped,
+    so Frappe's automatic ``CREATE INDEX "field" ... ("field")`` can silently
+    no-op on a later table because an unrelated table already owns that name. Only
+    the unmistakable automatic form where index name == sole column is changed;
+    explicit/custom index names are preserved.
+    """
+    pattern = re.compile(
+        r'(?P<prefix>\bCREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+)'
+        r'"(?P<index>[^"]+)"\s+ON\s+'
+        r'(?:(?:"(?P<schema>[^"]+)"\.)?)"(?P<table>[^"]+)"\s*'
+        r'\(\s*"(?P<column>[^"]+)"\s*\)',
+        re.IGNORECASE,
+    )
+
+    def replace(match):
+        if match.group("index") != match.group("column"):
+            return match.group(0)
+        table = match.group("table")
+        index_name = f"{table}_{match.group('index')}_index"
+        qualified_table = f'"{match.group("schema")}"."{table}"' if match.group("schema") else f'"{table}"'
+        return f'{match.group("prefix")}"{index_name}" ON {qualified_table}("{match.group("column")}")'
+
+    return pattern.sub(replace, query)
+
+
+def normalize_mysql_literal_date_time_addition(query):
+    """Type literal date + time pairs that MariaDB accepts implicitly."""
+    return re.sub(
+        r"(?P<open>\(?)'(?P<date>\d{4}-\d{2}-\d{2})'\s*\+\s*'(?P<time>\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)'(?P<close>\)?)",
+        lambda m: f"{m.group('open')}DATE '{m.group('date')}' + TIME '{m.group('time')}'{m.group('close')}",
+        query,
+    )
+
+
+def normalize_postgres_unix_timestamp_epoch(query):
+    """Match MariaDB UNIX_TIMESTAMP integer-second results for Frappe's PG mapper."""
+    return re.sub(
+        r'(?P<expr>EXTRACT\s*\(\s*EPOCH\s+FROM\s+[^)]+\))',
+        r'CAST(\g<expr> AS BIGINT)',
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
 def convert_mysql_date_arithmetic(query):
     """Convert common MySQL current-date arithmetic to PostgreSQL syntax.
 
@@ -2742,6 +2789,7 @@ def apply_all_query_transformations(query):
 
     # Order matters here!
     query = remove_index_hints(query)
+    query = normalize_postgres_automatic_index_name(query)
     query = convert_if_to_case(query)
     query = convert_ifnull_to_coalesce(query)
     query = convert_date_format(query)
@@ -2749,6 +2797,8 @@ def apply_all_query_transformations(query):
     query = convert_mysql_month(query)
     query = convert_mysql_quarter(query)
     query = convert_mysql_date_arithmetic(query)
+    query = normalize_mysql_literal_date_time_addition(query)
+    query = normalize_postgres_unix_timestamp_epoch(query)
     query = normalize_erpnext_activation_last_login_timestamp(query)
     query = normalize_erpnext_batch_empty_expiry_date(query)
     query = convert_mysql_datediff(query)

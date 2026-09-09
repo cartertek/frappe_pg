@@ -78,7 +78,10 @@ from frappe_pg.postgres.query_transformers import (
     normalize_hrms_shift_attendance_grouping,
     normalize_hrms_skill_assessment_group_order,
     normalize_hrms_staffing_plan_aggregate,
+    normalize_mysql_literal_date_time_addition,
     normalize_payment_request_single_match_grouping,
+    normalize_postgres_automatic_index_name,
+    normalize_postgres_unix_timestamp_epoch,
     normalize_postgres_update_target_alias,
     qualify_frappe_grouped_order_aggregate,
     remove_distinct_unselected_default_order,
@@ -159,6 +162,29 @@ class TestQueryTransformers(unittest.TestCase):
     def test_zero_numeric_comparison_is_not_rewritten_as_date(self):
         query = "WHERE COALESCE(amount, 0) >= '0'"
         self.assertEqual(convert_mysql_zero_date_sentinel(query), query)
+
+    def test_postgres_automatic_index_name_is_table_scoped(self):
+        query = 'CREATE INDEX IF NOT EXISTS "item_name" ON "tabItem"("item_name")'
+        self.assertEqual(
+            normalize_postgres_automatic_index_name(query),
+            'CREATE INDEX IF NOT EXISTS "tabItem_item_name_index" ON "tabItem"("item_name")',
+        )
+        explicit = 'CREATE INDEX IF NOT EXISTS "custom_search" ON "tabItem"("item_name")'
+        self.assertEqual(normalize_postgres_automatic_index_name(explicit), explicit)
+
+    def test_literal_date_plus_time_is_typed(self):
+        query = "WHERE posting_date + posting_time > ('2021-01-01' + '00:01:00')"
+        self.assertEqual(
+            normalize_mysql_literal_date_time_addition(query),
+            "WHERE posting_date + posting_time > (DATE '2021-01-01' + TIME '00:01:00')",
+        )
+
+    def test_postgres_unix_timestamp_epoch_is_bigint(self):
+        query = 'SELECT EXTRACT(EPOCH FROM "posting_date") FROM "tabStock Ledger Entry"'
+        self.assertEqual(
+            normalize_postgres_unix_timestamp_epoch(query),
+            'SELECT CAST(EXTRACT(EPOCH FROM "posting_date") AS BIGINT) FROM "tabStock Ledger Entry"',
+        )
 
     def test_mysql_date_sub_curdate_from_erpnext_dashboard(self):
         query = "transaction_date > date_sub(curdate(), interval 1 year)"
