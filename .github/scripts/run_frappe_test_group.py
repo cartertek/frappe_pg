@@ -216,6 +216,11 @@ class SelectedTestRunner(ParallelTestRunner):
         self.group = group
         super().__init__("frappe", site=site)
 
+    def before_test_setup(self):
+        # Global Frappe test setup is captured once in the reusable PostgreSQL
+        # fixture. Per-file dependencies and every selected test still run.
+        print("Using prewarmed global Frappe test fixture")
+
     def run_tests_for_file(self, file_info):
         if file_info:
             path, filename = file_info
