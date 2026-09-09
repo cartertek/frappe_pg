@@ -531,6 +531,23 @@ jobs:
           if changed != 1:
               raise SystemExit(f"expected exactly one ERPNext workstation fixture correction, changed {changed}")
 
+
+          # Inventory Dimension tests create Custom Fields (including Stock Ledger Entry
+          # columns) and expect MariaDB's implicit DDL commit semantics. PostgreSQL DDL
+          # is transactional, so commit immediately after the test helper inserts a
+          # dimension to keep metadata and physical columns in sync across test rollbacks.
+          inventory_test = Path("apps/erpnext/erpnext/stock/doctype/inventory_dimension/test_inventory_dimension.py")
+          inventory_source = inventory_test.read_text()
+          inventory_marker = "\t\tif not args.do_not_save:\n\t\t\tdoc.insert(ignore_permissions=True)\n"
+          inventory_replacement = (
+              inventory_marker
+              + "\t\t\tfrappe.db.commit()  # PostgreSQL: match MariaDB DDL implicit-commit test semantics\n"
+          )
+          if inventory_replacement not in inventory_source:
+              if inventory_marker not in inventory_source:
+                  raise SystemExit("ERPNext inventory-dimension test helper marker not found")
+              inventory_test.write_text(inventory_source.replace(inventory_marker, inventory_replacement, 1))
+
           # ERPNext v15 creates Supplier.pan once in setUpClass and then rolls
           # back after each test. MariaDB's updatedb DDL implicitly commits the
           # class setup; PostgreSQL DDL is transactional, so preserve the
@@ -680,6 +697,23 @@ jobs:
                   changed += 1
           if changed != 1:
               raise SystemExit(f"expected exactly one ERPNext workstation fixture correction, changed {changed}")
+
+
+          # Inventory Dimension tests create Custom Fields (including Stock Ledger Entry
+          # columns) and expect MariaDB's implicit DDL commit semantics. PostgreSQL DDL
+          # is transactional, so commit immediately after the test helper inserts a
+          # dimension to keep metadata and physical columns in sync across test rollbacks.
+          inventory_test = Path("apps/erpnext/erpnext/stock/doctype/inventory_dimension/test_inventory_dimension.py")
+          inventory_source = inventory_test.read_text()
+          inventory_marker = "\t\tif not args.do_not_save:\n\t\t\tdoc.insert(ignore_permissions=True)\n"
+          inventory_replacement = (
+              inventory_marker
+              + "\t\t\tfrappe.db.commit()  # PostgreSQL: match MariaDB DDL implicit-commit test semantics\n"
+          )
+          if inventory_replacement not in inventory_source:
+              if inventory_marker not in inventory_source:
+                  raise SystemExit("ERPNext inventory-dimension test helper marker not found")
+              inventory_test.write_text(inventory_source.replace(inventory_marker, inventory_replacement, 1))
           PYFIX
 
       - name: Instrument ERPNext v16 install timing
@@ -1425,7 +1459,7 @@ jobs:
           check-latest: true
 
       - name: Install test system dependencies
-        if: matrix.test_group == 'remainder-1' || matrix.test_group == 'remainder-4' || matrix.test_group == 'remainder-10'
+        if: matrix.test_group == 'remainder-1' || matrix.test_group == 'remainder-3' || matrix.test_group == 'remainder-4' || matrix.test_group == 'remainder-10'
         run: |
           wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
           sudo apt-get update -qq
@@ -1700,7 +1734,7 @@ jobs:
           check-latest: true
 
       - name: Install test system dependencies
-        if: matrix.test_group == 'remainder-1' || matrix.test_group == 'remainder-4' || matrix.test_group == 'remainder-10'
+        if: matrix.test_group == 'remainder-1' || matrix.test_group == 'remainder-3' || matrix.test_group == 'remainder-4' || matrix.test_group == 'remainder-10'
         run: |
           wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
           sudo apt-get update -qq

@@ -79,3 +79,32 @@ if "def _frappe_pg_timed_install_phase" not in installer_source:
             raise SystemExit(f"Frappe install phase not found: {old.strip()}")
         installer_source = installer_source.replace(old, new, 1)
     installer.write_text(installer_source)
+
+
+# Time dashboard synchronization directly as well. This is more reliable than
+# wrapping the installer-local import because it instruments the function body
+# that prints "Updating Dashboard for ..." and imports every dashboard record.
+dashboard = Path("apps/frappe/frappe/utils/dashboard.py")
+dashboard_source = dashboard.read_text()
+dashboard_start = "def sync_dashboards(app=None):\n\t\"\"\"Import, overwrite dashboards from `[app]/[app]_dashboard`\"\"\"\n"
+if "[frappe_pg dashboard timing]" not in dashboard_source:
+    if dashboard_start not in dashboard_source:
+        raise SystemExit("Frappe sync_dashboards marker not found")
+    dashboard_source = dashboard_source.replace(
+        dashboard_start,
+        dashboard_start + "\timport time\n\n" + "\t_frappe_pg_dashboard_started = time.perf_counter()\n",
+        1,
+    )
+    end_marker = "\n\ndef make_records_in_module(app, module):\n"
+    if end_marker not in dashboard_source:
+        raise SystemExit("Frappe sync_dashboards end marker not found")
+    dashboard_source = dashboard_source.replace(
+        end_marker,
+        "\n\tprint(\n"
+        "\t\tf\"[frappe_pg dashboard timing] {app or 'all'}: \"\n"
+        "\t\tf\"{time.perf_counter() - _frappe_pg_dashboard_started:.3f}s\",\n"
+        "\t\tflush=True,\n"
+        "\t)\n" + end_marker,
+        1,
+    )
+    dashboard.write_text(dashboard_source)
