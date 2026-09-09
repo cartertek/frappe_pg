@@ -60,7 +60,7 @@ def is_needed():
     )
 
 
-def _compatible(item_code: str, warehouse: str, batch_no: str | None = None, ignore_sre=None) -> float:
+def _compatible(item_code: str, warehouse: str, batch_no=None, ignore_sre=None) -> float:
     import frappe
     from frappe.query_builder.functions import Sum
 
