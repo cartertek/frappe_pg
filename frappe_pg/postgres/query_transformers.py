@@ -1162,6 +1162,71 @@ def normalize_erpnext_production_plan_subitems_grouping(query):
     )
 
 
+def normalize_erpnext_production_plan_explosion_grouping(query):
+    """Match ERPNext develop's grouped Production Plan BOM Explosion query."""
+    required = (
+        r'\bFROM\s+"tabBOM Explosion Item"',
+        r'\bJOIN\s+"tabBOM"',
+        r'\bJOIN\s+"tabItem"',
+        r'\bGROUP\s+BY\s+"tabBOM Explosion Item"\."item_code"\s*,\s*"tabBOM Explosion Item"\."stock_uom"',
+        r'SUM\s*\(.*"tabBOM Explosion Item"\."stock_qty"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE | re.DOTALL) for pattern in required):
+        return query
+
+    grouped = {
+        '"tabBOM Explosion Item"."item_code"'.lower(),
+        '"tabBOM Explosion Item"."stock_uom"'.lower(),
+    }
+    select_match = re.search(r"\bSELECT\b", query, re.IGNORECASE)
+    if not select_match:
+        return query
+    from_start = _find_top_level_keyword(query, "FROM", select_match.end())
+    if from_start is None:
+        return query
+
+    field_pattern = re.compile(
+        r'^(?P<field>"(?P<table>tab(?:BOM Explosion Item|BOM|Item|Item Default|UOM Conversion Detail))"\.'
+        r'"(?P<column>[^"]+)")(?P<alias>\s+(?:AS\s+)?"?[^,]+"?)?$',
+        re.IGNORECASE,
+    )
+    transformed = []
+    changed = False
+    for item in split_by_comma(query[select_match.end() : from_start]):
+        stripped = item.strip()
+        match = field_pattern.match(stripped)
+        if not match or match.group("field").lower() in grouped:
+            transformed.append(stripped)
+            continue
+        alias = match.group("alias") or f' AS "{match.group("column")}"'
+        transformed.append(f'MAX({match.group("field")}){alias}')
+        changed = True
+    if not changed:
+        return query
+    return query[: select_match.end()] + " " + ", ".join(transformed) + " " + query[from_start:]
+
+
+def normalize_erpnext_batch_bundle_grouping(query):
+    """Aggregate SLE scalars in ERPNext's grouped batch-bundle balance query."""
+    required = (
+        r'\bFROM\s+"tabStock Ledger Entry"',
+        r'\bJOIN\s+"tabSerial and Batch Entry"',
+        r'SUM\s*\(\s*"tabSerial and Batch Entry"\."qty"\s*\)',
+        r'\bGROUP\s+BY\s+"tabStock Ledger Entry"\."voucher_no"\s*,\s*"tabSerial and Batch Entry"\."batch_no"\s*,\s*"tabSerial and Batch Entry"\."warehouse"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    for field in ("item_code", "warehouse", "posting_date"):
+        query = re.sub(
+            rf'(?<![A-Za-z0-9_])(?P<expr>"tabStock Ledger Entry"\."{field}")(?=\s*(?:,|FROM\b))',
+            rf'MAX(\g<expr>) AS "{field}"',
+            query,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return query
+
+
 def normalize_erpnext_bank_clearance_journal_query(query):
     """Match ERPNext develop's PostgreSQL-safe Journal Entry bank-clearance query.
 
@@ -1783,7 +1848,7 @@ def normalize_erpnext_reserved_warehouse_distinct(query):
     query = query[: order_match.start()] + group + query[order_match.start() :]
     return re.sub(
         r'\bORDER\s+BY\s+(?:"tabStock Reservation Entry"\.)?"creation"(?P<direction>\s+(?:ASC|DESC))?',
-        lambda match: ('ORDER BY MIN("creation")' + (match.group("direction") or "")),
+        lambda match: 'ORDER BY MIN("creation")' + (match.group("direction") or ""),
         query,
         count=1,
         flags=re.IGNORECASE,
@@ -1894,7 +1959,7 @@ def normalize_postgres_update_target_alias(query):
     alias = match.group("alias")
     body = re.sub(
         r'(?P<boundary>^|,)\s*' + re.escape(alias) + r'\.(?P<column>"[^"]+")\s*=',
-        lambda m: f'{m.group("boundary")}{" " if m.group("boundary") else ""}{m.group("column") }=',
+        lambda m: f'{m.group("boundary")}{" " if m.group("boundary") else ""}{m.group("column")}=',
         match.group("body"),
     )
     if body == match.group("body"):
@@ -1949,6 +2014,17 @@ def convert_mysql_month(query):
     return re.sub(
         rf'\bMONTH\s*\(\s*(?P<expr>{atom})\s*\)',
         lambda m: f"EXTRACT(MONTH FROM {m.group('expr')})",
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
+def convert_mysql_quarter(query):
+    """Translate MySQL QUARTER(expr) for simple date columns/expressions."""
+    atom = r'(?:"[^"]+"(?:\."[^"]+")?|[A-Za-z_][A-Za-z0-9_$.]*)'
+    return re.sub(
+        rf'\bQUARTER\s*\(\s*(?P<expr>{atom})\s*\)',
+        lambda m: f"EXTRACT(QUARTER FROM {m.group('expr')})",
         query,
         flags=re.IGNORECASE,
     )
@@ -2285,6 +2361,35 @@ def normalize_erpnext_stock_ledger_grouped_posting_date(query):
         count=1,
         flags=re.IGNORECASE,
     )
+
+
+def normalize_erpnext_stock_account_value_grouping(query):
+    """Backport grouped Stock/Account Value report projections from ERPNext develop."""
+    required = (
+        r'\bFROM\s+"tabStock Ledger Entry"',
+        r'SUM\s*\(\s*"?stock_value_difference"?\s*\)',
+        r'\bGROUP\s+BY\s+"?voucher_type"?\s*,\s*"?voucher_no"?',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+
+    # Repair the malformed two-argument MAX emitted by older grouped-field handling.
+    query = re.sub(
+        r'MAX\s*\(\s*"?posting_date"?\s*,\s*"?posting_time"?\s*\)'
+        r'\s+(?:AS\s+)?"posting_date, posting_time"',
+        'MAX("posting_date") AS "posting_date", MAX("posting_time") AS "posting_time"',
+        query,
+        flags=re.IGNORECASE,
+    )
+    for field in ("name", "posting_date", "posting_time"):
+        query = re.sub(
+            rf'(?P<boundary>\bSELECT\s+|,\s*)(?P<field>"?{field}"?)(?=\s*(?:,|FROM\b))',
+            lambda match: f'{match.group("boundary")}MAX({match.group("field")}) AS "{field}"',
+            query,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return query
 
 
 def normalize_erpnext_item_query_table_references(query):
@@ -2626,6 +2731,7 @@ def apply_all_query_transformations(query):
     query = convert_date_format(query)
     query = convert_mysql_monthname(query)
     query = convert_mysql_month(query)
+    query = convert_mysql_quarter(query)
     query = convert_mysql_date_arithmetic(query)
     query = normalize_erpnext_activation_last_login_timestamp(query)
     query = normalize_erpnext_batch_empty_expiry_date(query)
@@ -2662,6 +2768,7 @@ def apply_all_query_transformations(query):
     query = normalize_hrms_reserved_user_alias(query)
     query = normalize_hrms_shift_attendance_grouping(query)
     query = normalize_erpnext_production_plan_subitems_grouping(query)
+    query = normalize_erpnext_production_plan_explosion_grouping(query)
     query = normalize_erpnext_bank_clearance_journal_query(query)
     query = convert_erpnext_customer_suffix_unsigned(query)
     query = normalize_erpnext_advance_payment_currency_aggregate(query)
@@ -2689,6 +2796,8 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_sales_pipeline_grouping(query)
     query = remove_distinct_unselected_default_order(query)
     query = normalize_erpnext_stock_ledger_grouped_posting_date(query)
+    query = normalize_erpnext_batch_bundle_grouping(query)
+    query = normalize_erpnext_stock_account_value_grouping(query)
     query = normalize_erpnext_item_query_table_references(query)
     query = normalize_erpnext_bom_valuation_division(query)
     query = normalize_frappe_user_name_casefold(query)
