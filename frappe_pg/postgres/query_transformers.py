@@ -1711,6 +1711,44 @@ def convert_erpnext_modified_timediff(query):
     right = match.group("right")
     return f"SELECT (CAST({left} AS timestamp) - CAST({right} AS timestamp))"
 
+def normalize_hrms_reserved_user_alias(query):
+    """Quote HRMS's legacy ``user`` alias, which is reserved by PostgreSQL."""
+    if not re.search(r'\bFROM\s+"tabHas Role"\s+has_role', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bLEFT\s+JOIN\s+"tabUser"\s+user\b', query, re.IGNORECASE):
+        return query
+    query = re.sub(r'(\bLEFT\s+JOIN\s+"tabUser"\s+)user\b', r'\1"user"', query, flags=re.IGNORECASE)
+    return re.sub(r'(?<!["A-Za-z0-9_])user\.', '"user".', query, flags=re.IGNORECASE)
+
+def normalize_hrms_shift_attendance_grouping(query):
+    """Preserve one Attendance row while aggregating functionally-dependent joined values.
+
+    The legacy report groups by Attendance.name to collapse joined check-in rows,
+    while selecting check-in shift boundaries and Shift Type flags outside the
+    GROUP BY. MariaDB permits that; PostgreSQL does not. These values are constant
+    for an attendance/shift, so MAX preserves the legacy single-row shape.
+    """
+    required = (
+        r'\bFROM\s+"tabAttendance"',
+        r'\bJOIN\s+"tabShift Type"',
+        r'\bJOIN\s+"tabEmployee Checkin"',
+        r'\bGROUP\s+BY\s+"tabAttendance"\."name"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    fields = (
+        'shift_start', 'shift_end', 'shift_actual_start', 'shift_actual_end',
+        'enable_late_entry_marking', 'late_entry_grace_period',
+        'enable_early_exit_marking', 'early_exit_grace_period',
+    )
+    for field in fields:
+        query = re.sub(
+            rf'(?<!MAX\()(?P<expr>"tab(?:Employee Checkin|Shift Type)"\."{field}")',
+            rf'MAX(\g<expr>) AS "{field}"',
+            query, count=1, flags=re.IGNORECASE,
+        )
+    return query
+
 def convert_mysql_update_join(query):
     """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
 
@@ -1810,6 +1848,8 @@ def apply_all_query_transformations(query):
     query = normalize_hrms_income_tax_salary_slip_grouping(query)
     query = normalize_hrms_shift_assignment_empty_end_date(query)
     query = normalize_hrms_skill_assessment_group_order(query)
+    query = normalize_hrms_reserved_user_alias(query)
+    query = normalize_hrms_shift_attendance_grouping(query)
     query = normalize_erpnext_production_plan_subitems_grouping(query)
     query = normalize_erpnext_bank_clearance_journal_query(query)
     query = convert_erpnext_customer_suffix_unsigned(query)
