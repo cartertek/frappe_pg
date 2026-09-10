@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Run an app's global test setup once before snapshotting a reusable CI fixture."""
+"""Run app-global test setup once before snapshotting reusable CI fixtures."""
 
 import argparse
+import importlib.util
 
 import frappe
 
@@ -14,11 +15,42 @@ except ImportError:  # Frappe v15
         frappe.flags.in_test = enabled
 
 
+def _erpnext_v16_bootstrap():
+    """Run ERPNext v16+ BootStrapTestData when the trigger module exists."""
+    bootstrap_module = "erpnext.tests.bootstrap_test_data"
+    if importlib.util.find_spec(bootstrap_module) is None:
+        return False
+    print("Running ERPNext bootstrap test data setup")
+    frappe.get_module(bootstrap_module)
+    return True
+
+
+def _run_app_test_setup(app):
+    # Match ParallelTestRunner.before_test_setup ordering exactly: app hook first,
+    # then the app's declared global test dependencies.
+    for fn in frappe.get_hooks("before_tests", app_name=app):
+        print(f"Running global test setup hook: {fn}")
+        frappe.get_attr(fn)()
+
+    if app == "erpnext":
+        _erpnext_v16_bootstrap()
+
+    test_module = frappe.get_module(f"{app}.tests")
+    for doctype in getattr(test_module, "global_test_dependencies", ()):
+        print(f"Creating global test dependency: {doctype}")
+        make_test_records(doctype, commit=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--site", required=True)
     parser.add_argument("--app", required=True)
-    parser.add_argument("--phase", choices=("all", "bootstrap", "before-tests"), default="all")
+    parser.add_argument(
+        "--phase",
+        choices=("all", "hrms-base"),
+        default="all",
+        help="hrms-base runs only the v16 ERPNext bootstrap needed before HRMS; v15 is intentionally a no-op.",
+    )
     args = parser.parse_args()
 
     frappe.init(site=args.site)
@@ -29,40 +61,16 @@ def main():
     frappe.clear_cache()
     frappe.utils.scheduler.disable_scheduler()
 
-    if args.phase in {"all", "bootstrap"}:
-        if args.app == "erpnext":
-            # ERPNext v16+ ships a CI-only trigger module whose import instantiates
-            # BootStrapTestData. Older branches rely on global test dependencies.
-            import importlib.util
+    if args.phase == "hrms-base":
+        if args.app != "erpnext":
+            raise SystemExit("hrms-base phase is only valid for ERPNext")
+        # v15 must remain company-free so HRMS before_tests executes setup_complete
+        # for _Test Company. v16 needs BootStrapTestData first because importing
+        # erpnext.tests.utils later otherwise collides with installed master rows.
+        _erpnext_v16_bootstrap()
+    else:
+        _run_app_test_setup(args.app)
 
-            bootstrap_module = "erpnext.tests.bootstrap_test_data"
-            if importlib.util.find_spec(bootstrap_module) is not None:
-                print("Running ERPNext bootstrap test data setup")
-                frappe.get_module(bootstrap_module)
-            else:
-                # ERPNext v15 predates BootStrapTestData. Seed the same preset
-                # prerequisites needed by its global test records without running
-                # setup_complete()/ERPNext before_tests, which would create the
-                # unrelated Wind Power LLC test company.
-                from frappe.desk.page.setup_wizard.install_fixtures import update_genders, update_salutations
-                from erpnext.setup.setup_wizard.operations.install_fixtures import install
-
-                print("Running ERPNext v15 preset fixture setup")
-                update_genders()
-                update_salutations()
-                install("India")
-
-        test_module = frappe.get_module(f"{args.app}.tests")
-        for doctype in getattr(test_module, "global_test_dependencies", ()):
-            print(f"Creating global test dependency: {doctype}")
-            make_test_records(doctype, commit=True)
-
-    if args.phase in {"all", "before-tests"}:
-        for fn in frappe.get_hooks("before_tests", app_name=args.app):
-            print(f"Running global test setup hook: {fn}")
-            frappe.get_attr(fn)()
-
-    # Persist the one-time global test setup into the reusable database snapshot consumed by all shards.
     frappe.db.commit()  # nosemgrep
 
 

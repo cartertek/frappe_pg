@@ -287,9 +287,6 @@ jobs:
             --db-root-username postgres \
             --db-root-password root \
             --admin-password admin
-          cd sites
-          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app frappe
-          cd ..
           bench --site test_site install-app frappe_pg
           bench --site test_site set-config allow_tests 1 --parse
           bench --site test_site set-config server_script_enabled 1 --parse
@@ -300,6 +297,12 @@ jobs:
           bench --site test_site set-config mail_login "test@example.com"
           bench --site test_site set-config mail_password test
           bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
+          # ERPNext must start from installed Frappe state, before Frappe's own
+          # before_tests/global User records alter application test semantics.
+          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/frappe_base.dump"
+          cd sites
+          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app frappe
+          cd ..
           sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
 
@@ -312,6 +315,7 @@ jobs:
           name: frappe-bench-v15
           path: |
             ${{ runner.temp }}/frappe-bench.tar
+            ${{ runner.temp }}/frappe_base.dump
             ${{ runner.temp }}/test_frappe.dump
           compression-level: 6
           retention-days: 1
@@ -402,9 +406,6 @@ jobs:
             --db-root-username postgres \
             --db-root-password root \
             --admin-password admin
-          cd sites
-          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app frappe
-          cd ..
           bench --site test_site install-app frappe_pg
           bench --site test_site set-config allow_tests 1 --parse
           bench --site test_site set-config server_script_enabled 1 --parse
@@ -415,6 +416,12 @@ jobs:
           bench --site test_site set-config mail_login "test@example.com"
           bench --site test_site set-config mail_password test
           bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
+          # ERPNext must start from installed Frappe state, before Frappe's own
+          # before_tests/global User records alter application test semantics.
+          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/frappe_base.dump"
+          cd sites
+          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app frappe
+          cd ..
           sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
 
@@ -427,6 +434,7 @@ jobs:
           name: frappe-bench-v16
           path: |
             ${{ runner.temp }}/frappe-bench.tar
+            ${{ runner.temp }}/frappe_base.dump
             ${{ runner.temp }}/test_frappe.dump
           compression-level: 6
           retention-days: 1
@@ -492,7 +500,7 @@ jobs:
           CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
           CREATE DATABASE test_frappe OWNER test_frappe;
           SQL
-          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/frappe_base.dump"
           cd sites
           ../env/bin/python - <<'PYVERIFY'
           import frappe
@@ -586,11 +594,11 @@ jobs:
           # HRMS needs ERPNext's bootstrap/global test records, but not ERPNext's
           # app-specific before_tests state. Persist that intermediate fixture.
           cd sites
-          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext --phase bootstrap
+          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext --phase hrms-base
           cd ..
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/erpnext_base.dump"
           cd sites
-          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext --phase before-tests
+          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext
           cd ..
           sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
@@ -670,7 +678,7 @@ jobs:
           CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
           CREATE DATABASE test_frappe OWNER test_frappe;
           SQL
-          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/frappe_base.dump"
           cd sites
           ../env/bin/python - <<'PYVERIFY'
           import frappe
@@ -755,11 +763,11 @@ jobs:
           # HRMS needs ERPNext's bootstrap/global test records, but not ERPNext's
           # app-specific before_tests state. Persist that intermediate fixture.
           cd sites
-          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext --phase bootstrap
+          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext --phase hrms-base
           cd ..
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/erpnext_base.dump"
           cd sites
-          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext --phase before-tests
+          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext
           cd ..
           sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
@@ -2023,7 +2031,7 @@ jobs:
           check-latest: true
 
       - name: Install test system dependencies
-        if: matrix.test_group == 'payroll-heavy' || matrix.test_group == 'remainder-6'
+        if: matrix.test_group == 'payroll-heavy' || matrix.test_group == 'leave-heavy' || matrix.test_group == 'remainder-5' || matrix.test_group == 'remainder-6'
         run: |
           wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
           sudo apt-get update -qq
@@ -2274,7 +2282,7 @@ jobs:
           check-latest: true
 
       - name: Install test system dependencies
-        if: matrix.test_group == 'payroll-heavy' || matrix.test_group == 'remainder-6'
+        if: matrix.test_group == 'payroll-heavy' || matrix.test_group == 'leave-heavy' || matrix.test_group == 'remainder-5' || matrix.test_group == 'remainder-6'
         run: |
           wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
           sudo apt-get update -qq
