@@ -989,6 +989,17 @@ jobs:
                   raise SystemExit("HRMS payroll bank-entry ordering assertion marker not found")
               source = source.replace(old, new, 1)
           payroll.write_text(source)
+
+          ctc = Path("apps/hrms/hrms/payroll/report/employee_ctc_break_up/test_employee_ctc_breakup.py")
+          source = ctc.read_text()
+          old = "\t\t\tself.assertEqual(ctc_breakup.format_currency(ctc_breakup.ctc), data[\"annual_ctc\"])\n"
+          new = "\t\t\tself.assertEqual(ctc_breakup.format_currency(ctc_breakup.ctc), fmt_money(data[\"ctc\"], precision=2, currency=data[\"currency\"]))\n"
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("HRMS CTC currency-format assertion marker not found")
+              if "from frappe.utils import fmt_money" not in source:
+                  source = source.replace("from frappe.utils import", "from frappe.utils import fmt_money,", 1)
+              ctc.write_text(source.replace(old, new, 1))
           PYFIX
           bench --site test_site install-app hrms
           cd sites
