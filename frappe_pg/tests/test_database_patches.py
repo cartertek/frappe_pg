@@ -102,10 +102,30 @@ class TestPostgresQueryValueCompatibility(unittest.TestCase):
             '"tabJournal Entry"."clearance_date"=%(param3)s)'
         )
         values = {"param3": "0000-00-00"}
-        transformed = database_patches._normalize_erpnext_zero_date_params(query, values)
+        transformed = database_patches._normalize_erpnext_empty_date_params(query, values)
         self.assertEqual(
             transformed,
             'WHERE ("tabJournal Entry"."clearance_date" IS NULL OR "tabJournal Entry"."clearance_date" IS NULL)',
+        )
+
+    def test_parameterized_erpnext_empty_dates_become_null_checks(self):
+        cases = [
+            ('"disposal_date"=%(param1)s', {"param1": ""}, '"disposal_date" IS NULL'),
+            ('"expiry_date"=%(param3)s', {"param3": ""}, '"expiry_date" IS NULL'),
+        ]
+        for query, values, expected in cases:
+            with self.subTest(query=query):
+                self.assertEqual(
+                    database_patches._normalize_erpnext_empty_date_params(query, values), expected
+                )
+
+    def test_parameterized_posting_datetime_operands_are_typed(self):
+        query = "and (posting_date + posting_time) > (%(posting_date)s + %(posting_time)s)"
+        values = {"posting_date": "2021-01-01", "posting_time": "00:01:00"}
+        self.assertEqual(
+            database_patches._type_erpnext_posting_datetime_params(query, values),
+            "and (posting_date + posting_time) > "
+            "(CAST(%(posting_date)s AS DATE) + CAST(%(posting_time)s AS TIME))",
         )
 
 
