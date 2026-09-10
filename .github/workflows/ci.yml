@@ -959,6 +959,37 @@ jobs:
         run: |
           bench get-app --branch "version-16" hrms https://github.com/frappe/hrms.git
           bench setup requirements --dev hrms
+          python - <<'PYFIX'
+          from pathlib import Path
+
+          # HRMS tests compare rows returned without a portable ordering contract.
+          # MariaDB and PostgreSQL collate generated names differently, so assert
+          # the same business values by identity / after a deterministic Python sort.
+          bssa = Path("apps/hrms/hrms/payroll/doctype/bulk_salary_structure_assignment/test_bulk_salary_structure_assignment.py")
+          source = bssa.read_text()
+          old = "\t\t# employee grade default base pay fetched\n\t\tself.assertEqual(employees[0].base, self.grade.default_base_pay)\n\t\t# no employee grade\n\t\tself.assertEqual(employees[1].base, 0)\n"
+          new = "\t\temployees_by_id = {row.employee: row for row in employees}\n\t\t# employee grade default base pay fetched\n\t\tself.assertEqual(employees_by_id[self.emp1].base, self.grade.default_base_pay)\n\t\t# no employee grade\n\t\tself.assertEqual(employees_by_id[self.emp3].base, 0)\n"
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("HRMS BSSA ordering assertion marker not found")
+              bssa.write_text(source.replace(old, new, 1))
+
+          payroll = Path("apps/hrms/hrms/payroll/doctype/payroll_entry/test_payroll_entry.py")
+          source = payroll.read_text()
+          old = "\t\tself.assertEqual(je_entries, expected_je)\n"
+          new = "\t\tself.assertEqual(sorted(je_entries), sorted(expected_je))\n"
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("HRMS payroll JE ordering assertion marker not found")
+              source = source.replace(old, new, 1)
+          old = "\t\tself.assertEqual(debit_entries, expected_entries)\n"
+          new = "\t\tkey = lambda row: tuple(str(row.get(field)) for field in (\"party\", \"account\", \"cost_center\", \"debit\", \"credit\"))\n\t\tself.assertEqual(sorted(debit_entries, key=key), sorted(expected_entries, key=key))\n"
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("HRMS payroll bank-entry ordering assertion marker not found")
+              source = source.replace(old, new, 1)
+          payroll.write_text(source)
+          PYFIX
           bench --site test_site install-app hrms
           cd sites
           ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app hrms
