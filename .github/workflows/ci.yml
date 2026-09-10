@@ -594,15 +594,14 @@ jobs:
           bench --site test_site set-config mail_login "test@example.com"
           bench --site test_site set-config mail_password test
           bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
-          # HRMS and ERPNext v16 shards must start from installed ERPNext state
-          # before test-only bootstrap data is created. ERPNext v15 then prewarms
-          # its documented before_tests/global dependencies; v16 has neither.
+          # Match upstream CI: snapshot ERPNext immediately after app installation.
+          # Each shard runs the app's native before_tests/global dependencies (or
+          # v16 bootstrap imports) in its own fresh process. Keep the filesystem
+          # test-record journal consistent with this installed-only database.
+          rm -f sites/test_site/.test_records.jsonl
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/erpnext_base.dump"
-          cd sites
-          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext
-          cd ..
           sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
-          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
+          cp "$RUNNER_TEMP/erpnext_base.dump" "$RUNNER_TEMP/test_frappe.dump"
 
       - name: Pack reusable ERPNext fixture
         run: tar -C /home/runner -cf "$RUNNER_TEMP/frappe-bench.tar" frappe-bench
@@ -762,15 +761,14 @@ jobs:
           bench --site test_site set-config mail_login "test@example.com"
           bench --site test_site set-config mail_password test
           bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
-          # HRMS and ERPNext v16 shards must start from installed ERPNext state
-          # before test-only bootstrap data is created. ERPNext v15 then prewarms
-          # its documented before_tests/global dependencies; v16 has neither.
+          # Match upstream CI: snapshot ERPNext immediately after app installation.
+          # Each shard runs the app's native before_tests/global dependencies (or
+          # v16 bootstrap imports) in its own fresh process. Keep the filesystem
+          # test-record journal consistent with this installed-only database.
+          rm -f sites/test_site/.test_records.jsonl
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/erpnext_base.dump"
-          cd sites
-          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext
-          cd ..
           sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
-          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
+          cp "$RUNNER_TEMP/erpnext_base.dump" "$RUNNER_TEMP/test_frappe.dump"
 
       - name: Pack reusable ERPNext fixture
         run: tar -C /home/runner -cf "$RUNNER_TEMP/frappe-bench.tar" frappe-bench

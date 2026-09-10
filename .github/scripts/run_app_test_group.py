@@ -91,13 +91,6 @@ class SelectedAppTestRunner(ParallelTestRunner):
         self.selected_app = app
         super().__init__(app, site=site)
 
-    def before_test_setup(self):
-        # The application-wide before_tests hooks and global test dependencies
-        # are run once while building the reusable PostgreSQL fixture. Repeating
-        # them in every shard costs minutes and recreates shared records. Per-file
-        # test dependencies still run normally in ParallelTestRunner.
-        print(f"Using prewarmed global {self.selected_app} test fixture")
-
     def get_test_file_list(self):
         app = self.selected_app
         by_path = unique_tests_by_path(app, get_all_tests(app))
