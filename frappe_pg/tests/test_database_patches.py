@@ -1816,12 +1816,17 @@ class TestPostgresAutomaticIndexDropPatch(unittest.TestCase):
             return frappe.db.sql('DROP INDEX IF EXISTS "middle_name" ;')
 
         table_class = type("FakePostgresTable", (), {"alter": old_alter})
+
+        class FakeDB:
+            def sql(self, query, *args, **kwargs):
+                queries.append(query)
+                return "ok"
+
+        fake_db = FakeDB()
         with (
             unittest.mock.patch.object(patch_module, "_load_postgres_table", return_value=table_class),
             unittest.mock.patch.object(patch_module, "_needs_patch", return_value=True),
-            unittest.mock.patch.object(
-                frappe.db, "sql", side_effect=lambda query, *args, **kwargs: queries.append(query) or "ok"
-            ),
+            unittest.mock.patch.object(frappe, "db", fake_db),
         ):
             patch_module._original_alter = None
             patch_module._patched_alter = None
@@ -1832,7 +1837,7 @@ class TestPostgresAutomaticIndexDropPatch(unittest.TestCase):
             self.assertEqual(queries, ['DROP INDEX IF EXISTS "tabUser_middle_name_index" ;'])
             # Restoring a bound method onto the instance would shadow future
             # class-level instrumentation of PostgresDatabase.sql.
-            self.assertNotIn("sql", getattr(frappe.db, "__dict__", {}))
+            self.assertNotIn("sql", fake_db.__dict__)
             self.assertTrue(patch_module.remove())
 
     def test_explicit_and_already_namespaced_indexes_are_unchanged(self):
