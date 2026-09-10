@@ -56,6 +56,48 @@ def _normalize_zero_timestamp_params(query, values):
     return normalized
 
 
+def _normalize_erpnext_empty_date_params(query, values):
+    """Rewrite ERPNext's parameterized empty/zero Date sentinels as NULL checks."""
+    if not isinstance(values, dict):
+        return query
+
+    fields = ("clearance_date", "disposal_date", "expiry_date")
+    for name, value in values.items():
+        if value not in {"", "0000-00-00"}:
+            continue
+        query = re.sub(
+            rf'(?P<field>(?:"[^"]+"\.)?"(?:{"|".join(fields)})")\s*=\s*%\({re.escape(name)}\)s',
+            r'\g<field> IS NULL',
+            query,
+            flags=re.IGNORECASE,
+        )
+    return query
+
+
+def _type_erpnext_posting_datetime_params(query, values):
+    """Type bound date/time operands used in ERPNext posting datetime arithmetic."""
+    if not isinstance(values, dict):
+        return query
+
+    pattern = re.compile(
+        r'\(posting_date\s*\+\s*posting_time\)\s*(?P<op>>=|<=|>|<|=)\s*'
+        r'\(%\((?P<date>[A-Za-z0-9_]+)\)s\s*\+\s*%\((?P<time>[A-Za-z0-9_]+)\)s\)',
+        re.IGNORECASE,
+    )
+
+    def replace(match):
+        date_name = match.group("date")
+        time_name = match.group("time")
+        if date_name not in values or time_name not in values:
+            return match.group(0)
+        return (
+            f"(posting_date + posting_time) {match.group('op')} "
+            f"(CAST(%({date_name})s AS DATE) + CAST(%({time_name})s AS TIME))"
+        )
+
+    return pattern.sub(replace, query)
+
+
 def _normalize_item_attribute_values(query, values):
     """Match varchar Item Attribute values against string parameters on PostgreSQL."""
     if not isinstance(values, dict):
@@ -83,6 +125,8 @@ def patched_transform_query(self, query, values):
     query, values = _original_transform_query(self, query, values)
     values = _normalize_zero_timestamp_params(query, values)
     values = _normalize_item_attribute_values(query, values)
+    query = _normalize_erpnext_empty_date_params(query, values)
+    query = _type_erpnext_posting_datetime_params(query, values)
     return apply_all_query_transformations(query), values
 
 
