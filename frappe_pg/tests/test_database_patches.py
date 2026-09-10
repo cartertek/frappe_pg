@@ -1760,6 +1760,7 @@ class TestTransformQueryHook(unittest.TestCase):
         self.assertFalse(status["commit_patched"])
         self.assertFalse(status["rollback_patched"])
 
+
 class TestPostgresAutomaticIndexDropPatch(unittest.TestCase):
     def test_drop_index_columns_are_temporarily_namespaced(self):
         from frappe_pg.compat.frappe import postgres_automatic_index_drop as patch_module
@@ -1771,7 +1772,10 @@ class TestPostgresAutomaticIndexDropPatch(unittest.TestCase):
             return "ok"
 
         table_class = type("FakePostgresTable", (), {"alter": old_alter})
-        with unittest.mock.patch.object(patch_module, "_load_postgres_table", return_value=table_class):
+        with (
+            unittest.mock.patch.object(patch_module, "_load_postgres_table", return_value=table_class),
+            unittest.mock.patch.object(patch_module, "_needs_patch", return_value=True),
+        ):
             patch_module._original_alter = None
             patch_module._patched_alter = None
             self.assertTrue(patch_module.apply())
