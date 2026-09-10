@@ -109,9 +109,12 @@ class SelectedAppTestRunner(ParallelTestRunner):
                 frappe.get_attr(fn)()
 
             if not frappe.db.exists("User", "test@example.com"):
-                make_test_records("Role", commit=True)
+                frappe.local.test_objects.setdefault("Role", [])
+                make_test_records_for_doctype("Role", force=True, commit=True)
                 frappe.local.test_objects.setdefault("User", [])
-                make_test_records_for_doctype("User", commit=True)
+                make_test_records_for_doctype("User", force=True, commit=True)
+                if not frappe.db.exists("User", "test@example.com"):
+                    raise RuntimeError("Frappe v15 User fixture seed did not create test@example.com")
 
             test_module = frappe.get_module(f"{self.selected_app}.tests")
             for doctype in getattr(test_module, "global_test_dependencies", ()):
