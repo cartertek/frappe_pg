@@ -91,6 +91,39 @@ class SelectedAppTestRunner(ParallelTestRunner):
         self.selected_app = app
         super().__init__(app, site=site)
 
+    def before_test_setup(self):
+        # Frappe v15's legacy dependency walker recursively follows Link fields
+        # from child tables. User -> User Email -> Email Account cycles back to
+        # an Email Account fixture whose email_id is test@example.com, before the
+        # User fixture itself has been inserted. Fresh deterministic shards expose
+        # this cycle in both ERPNext global dependencies and HRMS per-file ones.
+        # Preserve native hook ordering, then materialize Role + User directly once
+        # before any recursive dependency walk can encounter that cycle.
+        if str(getattr(frappe, "__version__", "")).startswith("15."):
+            import time
+
+            from frappe.test_runner import make_test_records, make_test_records_for_doctype
+
+            start_time = time.monotonic()
+            for fn in frappe.get_hooks("before_tests", app_name=self.selected_app):
+                frappe.get_attr(fn)()
+
+            if not frappe.db.exists("User", "test@example.com"):
+                make_test_records("Role", commit=True)
+                frappe.local.test_objects.setdefault("User", [])
+                make_test_records_for_doctype("User", commit=True)
+
+            test_module = frappe.get_module(f"{self.selected_app}.tests")
+            for doctype in getattr(test_module, "global_test_dependencies", ()):
+                if doctype != "User":
+                    make_test_records(doctype, commit=True)
+
+            elapsed = time.monotonic() - start_time
+            print(f"Before Test ({elapsed:.03f}s) [Frappe v15 User cycle compatibility]")
+            return
+
+        return super().before_test_setup()
+
     def get_test_file_list(self):
         app = self.selected_app
         by_path = unique_tests_by_path(app, get_all_tests(app))
