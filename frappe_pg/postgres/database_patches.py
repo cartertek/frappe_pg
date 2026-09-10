@@ -56,6 +56,22 @@ def _normalize_zero_timestamp_params(query, values):
     return normalized
 
 
+def _normalize_erpnext_zero_date_params(query, values):
+    """Rewrite parameterized ERPNext zero-date sentinels to PostgreSQL NULL checks."""
+    if not isinstance(values, dict):
+        return query
+
+    params = [name for name, value in values.items() if value == "0000-00-00"]
+    for name in params:
+        query = re.sub(
+            rf'(?P<field>(?:"tabJournal Entry"\.)?"clearance_date")\s*=\s*%\({re.escape(name)}\)s',
+            r'\g<field> IS NULL',
+            query,
+            flags=re.IGNORECASE,
+        )
+    return query
+
+
 def _normalize_item_attribute_values(query, values):
     """Match varchar Item Attribute values against string parameters on PostgreSQL."""
     if not isinstance(values, dict):
@@ -83,6 +99,7 @@ def patched_transform_query(self, query, values):
     query, values = _original_transform_query(self, query, values)
     values = _normalize_zero_timestamp_params(query, values)
     values = _normalize_item_attribute_values(query, values)
+    query = _normalize_erpnext_zero_date_params(query, values)
     return apply_all_query_transformations(query), values
 
 
