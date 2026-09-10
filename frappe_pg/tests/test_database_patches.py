@@ -1830,6 +1830,9 @@ class TestPostgresAutomaticIndexDropPatch(unittest.TestCase):
             table.table_name = "tabUser"
             self.assertEqual(table.alter(), "ok")
             self.assertEqual(queries, ['DROP INDEX IF EXISTS "tabUser_middle_name_index" ;'])
+            # Restoring a bound method onto the instance would shadow future
+            # class-level instrumentation of PostgresDatabase.sql.
+            self.assertNotIn("sql", getattr(frappe.db, "__dict__", {}))
             self.assertTrue(patch_module.remove())
 
     def test_explicit_and_already_namespaced_indexes_are_unchanged(self):

@@ -63,6 +63,8 @@ def apply():
     def compatible_alter(self, *args, **kwargs):
         import frappe
 
+        had_instance_sql = "sql" in getattr(frappe.db, "__dict__", {})
+        original_instance_sql = getattr(frappe.db, "__dict__", {}).get("sql")
         original_sql = frappe.db.sql
 
         def compatible_sql(query, *sql_args, **sql_kwargs):
@@ -72,7 +74,10 @@ def apply():
         try:
             return _original_alter(self, *args, **kwargs)
         finally:
-            frappe.db.sql = original_sql  # nosemgrep
+            if had_instance_sql:
+                frappe.db.sql = original_instance_sql  # nosemgrep
+            else:
+                delattr(frappe.db, "sql")
 
     _patched_alter = compatible_alter
     table.alter = compatible_alter  # nosemgrep
