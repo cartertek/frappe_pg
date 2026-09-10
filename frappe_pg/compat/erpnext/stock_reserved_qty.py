@@ -41,8 +41,10 @@ def _compatible(item_code, warehouse):
 
     open_so = (so.docstatus == 1) & so.status.notin(["On Hold", "Closed"])
     not_delivered_by_supplier = so_item.delivered_by_supplier.isnull() | (so_item.delivered_by_supplier == 0)
-    not_closed = so_item.closed.isnull() | (so_item.closed == 0)
     reservable = (so_item.qty != 0) & (so_item.qty >= so_item.delivered_qty)
+    item_open = None
+    if frappe.get_meta("Sales Order Item").has_field("closed"):
+        item_open = so_item.closed.isnull() | (so_item.closed == 0)
     net_reserved = (
         so_item.qty - so_item.delivered_qty - so_item.returned_qty
         if dont_reserve_on_return
@@ -62,12 +64,14 @@ def _compatible(item_code, warehouse):
             & (packed_item.parenttype == "Sales Order")
             & (packed_item.item_code != packed_item.parent_item)
             & not_delivered_by_supplier
-            & not_closed
             & open_so
             & reservable
         )
-        .run()
     )
+    if item_open is not None:
+        packed_qty = packed_qty.where(item_open)
+    packed_qty = packed_qty.run()
+
     direct_qty = (
         frappe.qb.from_(so_item)
         .inner_join(so)
@@ -77,12 +81,13 @@ def _compatible(item_code, warehouse):
             (so_item.item_code == item_code)
             & (so_item.warehouse == warehouse)
             & not_delivered_by_supplier
-            & not_closed
             & open_so
             & reservable
         )
-        .run()
     )
+    if item_open is not None:
+        direct_qty = direct_qty.where(item_open)
+    direct_qty = direct_qty.run()
     return flt(packed_qty[0][0]) + flt(direct_qty[0][0])
 
 
