@@ -1,6 +1,7 @@
 """Keep Frappe automatic index create/drop names symmetric on PostgreSQL."""
 
 import inspect
+import re
 
 NAME = "frappe_postgres_automatic_index_drop"
 _original_alter = None
@@ -33,30 +34,45 @@ def is_needed():
     return table is not None and not is_applied() and _needs_patch(table.alter)
 
 
+def _rewrite_automatic_drop(query, table_name):
+    if not isinstance(query, str) or "DROP INDEX" not in query.upper():
+        return query
+
+    pattern = re.compile(r'DROP\s+INDEX\s+IF\s+EXISTS\s+"(?P<index>[^"]+)"', re.IGNORECASE)
+
+    def replace(match):
+        index = match.group("index")
+        # Explicit names (for example unique_* or an already-qualified automatic
+        # name) are not Frappe's bare field-name automatic indexes.
+        if index.startswith("unique_") or index.startswith(f"{table_name}_"):
+            return match.group(0)
+        return f'DROP INDEX IF EXISTS "{table_name}_{index}_index"'
+
+    return pattern.sub(replace, query)
+
+
 def apply():
     global _original_alter, _patched_alter
 
     table = _load_postgres_table()
-    if table is None or is_applied():
-        return False
-    if not _needs_patch(table.alter):
+    if table is None or is_applied() or not _needs_patch(table.alter):
         return False
 
     _original_alter = table.alter
 
     def compatible_alter(self, *args, **kwargs):
-        renamed = []
-        for column in getattr(self, "drop_index", ()):
-            fieldname = getattr(column, "fieldname", None)
-            if not fieldname:
-                continue
-            renamed.append((column, fieldname))
-            column.fieldname = f"{self.table_name}_{fieldname}_index"
+        import frappe
+
+        original_sql = frappe.db.sql
+
+        def compatible_sql(query, *sql_args, **sql_kwargs):
+            return original_sql(_rewrite_automatic_drop(query, self.table_name), *sql_args, **sql_kwargs)
+
+        frappe.db.sql = compatible_sql  # nosemgrep
         try:
             return _original_alter(self, *args, **kwargs)
         finally:
-            for column, fieldname in renamed:
-                column.fieldname = fieldname
+            frappe.db.sql = original_sql  # nosemgrep
 
     _patched_alter = compatible_alter
     table.alter = compatible_alter  # nosemgrep

@@ -117,6 +117,16 @@ class TestPostgresResultCompatibility(unittest.TestCase):
         rows = [(datetime_time(8, 30),)]
         self.assertEqual(_normalize_time_cells(rows, [Mock(type_code=25)]), rows)
 
+    def test_postgres_time_column_metadata_matches_frappe_time_definition(self):
+        columns = [
+            frappe._dict(name="time", type="time without time zone"),
+            frappe._dict(name="name", type="varchar(140)"),
+        ]
+        with patch.object(database_patches, "_original_get_table_columns_description", return_value=columns):
+            result = database_patches.patched_get_table_columns_description(Mock(), "tabEvent Notifications")
+        self.assertEqual(result[0].type, "time(6)")
+        self.assertEqual(result[1].type, "varchar(140)")
+
 
 class TestQueryTransformers(unittest.TestCase):
     def test_remove_all_index_hint_variants(self):
@@ -1762,25 +1772,35 @@ class TestTransformQueryHook(unittest.TestCase):
 
 
 class TestPostgresAutomaticIndexDropPatch(unittest.TestCase):
-    def test_drop_index_columns_are_temporarily_namespaced(self):
+    def test_drop_index_sql_is_namespaced_after_alter_state_is_built(self):
         from frappe_pg.compat.frappe import postgres_automatic_index_drop as patch_module
 
-        seen = []
+        queries = []
 
         def old_alter(self):
-            seen.extend(col.fieldname for col in self.drop_index)
-            return "ok"
+            # Model Frappe's real alter path: the bare automatic index name is
+            # generated inside alter(), after column state has been rebuilt.
+            return frappe.db.sql('DROP INDEX IF EXISTS "middle_name" ;')
 
         table_class = type("FakePostgresTable", (), {"alter": old_alter})
         with (
             unittest.mock.patch.object(patch_module, "_load_postgres_table", return_value=table_class),
             unittest.mock.patch.object(patch_module, "_needs_patch", return_value=True),
+            unittest.mock.patch.object(
+                frappe.db, "sql", side_effect=lambda query, *args, **kwargs: queries.append(query) or "ok"
+            ),
         ):
             patch_module._original_alter = None
             patch_module._patched_alter = None
             self.assertTrue(patch_module.apply())
-            col = types.SimpleNamespace(fieldname="middle_name")
-            table = types.SimpleNamespace(table_name="tabUser", drop_index=[col])
-            self.assertEqual(table_class.alter(table), "ok")
-            self.assertEqual(seen, ["tabUser_middle_name_index"])
-            self.assertEqual(col.fieldname, "middle_name")
+            table = table_class()
+            table.table_name = "tabUser"
+            self.assertEqual(table.alter(), "ok")
+            self.assertEqual(queries, ['DROP INDEX IF EXISTS "tabUser_middle_name_index" ;'])
+            self.assertTrue(patch_module.remove())
+
+    def test_explicit_and_already_namespaced_indexes_are_unchanged(self):
+        from frappe_pg.compat.frappe import postgres_automatic_index_drop as patch_module
+
+        query = 'DROP INDEX IF EXISTS "unique_email" ; ' 'DROP INDEX IF EXISTS "tabUser_middle_name_index" ;'
+        self.assertEqual(patch_module._rewrite_automatic_drop(query, "tabUser"), query)

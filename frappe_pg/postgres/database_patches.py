@@ -25,6 +25,7 @@ from .query_transformers import apply_all_query_transformations
 _original_transform_query = None
 _original_transform_result = None
 _original_is_deadlocked = None
+_original_get_table_columns_description = None
 _had_transaction_advisory_lock = False
 _original_transaction_advisory_lock = None
 _patches_applied = False
@@ -153,6 +154,20 @@ def patched_is_deadlocked(exc):
     return getattr(exc, "pgcode", None) == "40001" or _original_is_deadlocked(exc)
 
 
+def patched_get_table_columns_description(self, table_name):
+    """Normalize PostgreSQL TIME metadata to Frappe's declared ``time(6)`` type.
+
+    ``information_schema.columns.data_type`` reports ``time without time zone``
+    while Frappe's PostgreSQL type map declares Time as ``time(6)``. Without
+    normalization every schema sync schedules the same no-op type alteration.
+    """
+    columns = _original_get_table_columns_description(self, table_name)
+    for column in columns:
+        if column.get("type") == "time without time zone":
+            column["type"] = "time(6)"
+    return columns
+
+
 def _advisory_lock_key(key) -> int:
     return int.from_bytes(hashlib.sha256(str(key).encode()).digest()[:8], "big", signed=True)
 
@@ -175,6 +190,7 @@ def _replace_class_attribute(target, name, value):
 def apply_postgres_fixes():
     """Install the query transformation hook once per process."""
     global _original_transform_query, _original_transform_result, _original_is_deadlocked
+    global _original_get_table_columns_description
     global _had_transaction_advisory_lock, _original_transaction_advisory_lock, _patches_applied
 
     if _patches_applied:
@@ -183,11 +199,15 @@ def apply_postgres_fixes():
     _original_transform_query = PostgresDatabase._transform_query
     _original_transform_result = PostgresDatabase._transform_result
     _original_is_deadlocked = PostgresDatabase.is_deadlocked
+    _original_get_table_columns_description = PostgresDatabase.get_table_columns_description
     _had_transaction_advisory_lock = hasattr(PostgresDatabase, "transaction_advisory_lock")
     _original_transaction_advisory_lock = getattr(PostgresDatabase, "transaction_advisory_lock", None)
     _replace_class_attribute(PostgresDatabase, "_transform_query", patched_transform_query)
     _replace_class_attribute(PostgresDatabase, "_transform_result", patched_transform_result)
     _replace_class_attribute(PostgresDatabase, "is_deadlocked", staticmethod(patched_is_deadlocked))
+    _replace_class_attribute(
+        PostgresDatabase, "get_table_columns_description", patched_get_table_columns_description
+    )
     if not _had_transaction_advisory_lock:
         _replace_class_attribute(PostgresDatabase, "transaction_advisory_lock", transaction_advisory_lock)
     _patches_applied = True
@@ -206,6 +226,10 @@ def remove_postgres_fixes():
         _replace_class_attribute(PostgresDatabase, "_transform_result", _original_transform_result)
     if PostgresDatabase.is_deadlocked == patched_is_deadlocked:
         _replace_class_attribute(PostgresDatabase, "is_deadlocked", staticmethod(_original_is_deadlocked))
+    if PostgresDatabase.get_table_columns_description == patched_get_table_columns_description:
+        _replace_class_attribute(
+            PostgresDatabase, "get_table_columns_description", _original_get_table_columns_description
+        )
     if (
         not _had_transaction_advisory_lock
         and getattr(PostgresDatabase, "transaction_advisory_lock", None) == transaction_advisory_lock
