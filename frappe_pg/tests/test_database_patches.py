@@ -117,7 +117,6 @@ class TestPostgresResultCompatibility(unittest.TestCase):
         rows = [(datetime_time(8, 30),)]
         self.assertEqual(_normalize_time_cells(rows, [Mock(type_code=25)]), rows)
 
-
     def test_postgres_time_column_metadata_matches_frappe_time_definition(self):
         columns = [
             frappe._dict(name="time", type="time without time zone"),
@@ -127,6 +126,7 @@ class TestPostgresResultCompatibility(unittest.TestCase):
             result = database_patches.patched_get_table_columns_description(Mock(), "tabEvent Notifications")
         self.assertEqual(result[0].type, "time(6)")
         self.assertEqual(result[1].type, "varchar(140)")
+
 
 class TestQueryTransformers(unittest.TestCase):
     def test_remove_all_index_hint_variants(self):

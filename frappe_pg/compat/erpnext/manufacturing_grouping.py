@@ -3,6 +3,7 @@
 import inspect
 from importlib import import_module
 
+NAME = "erpnext_manufacturing_grouping"
 _original_job_card = None
 _original_manufacture = None
 _patched_job_card = None
@@ -231,7 +232,31 @@ def _compatible_manufacture(self):
     return rows
 
 
-def apply_manufacturing_grouping_patch():
+def is_applied():
+    module = _load_stock_entry()
+    if module is None:
+        return False
+    cls = module.StockEntry
+    job_card_applied = _patched_job_card is None or cls.get_secondary_items_from_job_card is _patched_job_card
+    manufacture_applied = (
+        _patched_manufacture is None or cls.get_items_from_manufacture_stock_entry is _patched_manufacture
+    )
+    return (
+        (_patched_job_card is not None or _patched_manufacture is not None)
+        and job_card_applied
+        and manufacture_applied
+    )
+
+
+def is_needed():
+    module = _load_stock_entry()
+    if module is None:
+        return False
+    cls = module.StockEntry
+    return _needs_job_card_patch(cls) or _needs_manufacture_patch(cls)
+
+
+def apply():
     global _original_job_card, _original_manufacture, _patched_job_card, _patched_manufacture
     module = _load_stock_entry()
     if module is None:
@@ -248,4 +273,30 @@ def apply_manufacturing_grouping_patch():
         _patched_manufacture = _compatible_manufacture
         cls.get_items_from_manufacture_stock_entry = _patched_manufacture  # nosemgrep
         changed = True
+    return changed
+
+
+def remove():
+    global _original_job_card, _original_manufacture, _patched_job_card, _patched_manufacture
+    module = _load_stock_entry()
+    if module is None:
+        return False
+    cls = module.StockEntry
+    changed = False
+    if (
+        _patched_job_card is not None
+        and getattr(cls, "get_secondary_items_from_job_card", None) is _patched_job_card
+    ):
+        cls.get_secondary_items_from_job_card = _original_job_card  # nosemgrep
+        changed = True
+    if (
+        _patched_manufacture is not None
+        and cls.get_items_from_manufacture_stock_entry is _patched_manufacture
+    ):
+        cls.get_items_from_manufacture_stock_entry = _original_manufacture  # nosemgrep
+        changed = True
+    _original_job_card = None
+    _original_manufacture = None
+    _patched_job_card = None
+    _patched_manufacture = None
     return changed
