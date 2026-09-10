@@ -61,7 +61,7 @@ def _normalize_erpnext_empty_date_params(query, values):
     if not isinstance(values, dict):
         return query
 
-    fields = ("clearance_date", "disposal_date", "expiry_date")
+    fields = ("clearance_date", "disposal_date", "expiry_date", "end_of_life")
     for name, value in values.items():
         if value not in {"", "0000-00-00"}:
             continue
