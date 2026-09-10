@@ -37,3 +37,11 @@ try:
 except Exception:
     # Frappe/ERPNext might not be fully available yet during installation.
     pass
+
+# Apply ERPNext PostgreSQL-safe manufacturing grouping semantics.
+try:
+    from frappe_pg.patches.v1.fix_erpnext_manufacturing_grouping import apply_manufacturing_grouping_patch
+
+    apply_manufacturing_grouping_patch()
+except Exception:
+    pass
