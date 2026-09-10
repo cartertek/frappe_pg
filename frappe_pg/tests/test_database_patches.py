@@ -95,6 +95,20 @@ from frappe_pg.postgres.query_transformers import (
 )
 
 
+class TestPostgresQueryValueCompatibility(unittest.TestCase):
+    def test_parameterized_journal_clearance_zero_date_becomes_null_check(self):
+        query = (
+            'WHERE ("tabJournal Entry"."clearance_date" IS NULL OR '
+            '"tabJournal Entry"."clearance_date"=%(param3)s)'
+        )
+        values = {"param3": "0000-00-00"}
+        transformed = database_patches._normalize_erpnext_zero_date_params(query, values)
+        self.assertEqual(
+            transformed,
+            'WHERE ("tabJournal Entry"."clearance_date" IS NULL OR "tabJournal Entry"."clearance_date" IS NULL)',
+        )
+
+
 class TestPostgresResultCompatibility(unittest.TestCase):
     def test_time_cells_match_mariadb_timedelta_contract(self):
         description = [Mock(type_code=1083), Mock(type_code=25)]
