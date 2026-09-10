@@ -266,6 +266,16 @@ class SelectedTestRunner(ParallelTestRunner):
         return chunks[int(self.group.rsplit("-", 1)[1]) - 1]
 
 
+def initialize_frappe_pg_runtime():
+    """Reapply frappe_pg runtime compatibility in each fresh shard process."""
+    from frappe_pg.postgres.database_patches import apply_postgres_fixes
+    from frappe_pg.compat.registry import apply_compatibility_overrides
+
+    apply_postgres_fixes()
+    apply_compatibility_overrides()
+
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--site", required=True)
@@ -275,6 +285,7 @@ def main():
     print(f"Running Frappe test group {args.group}")
     patch_v15_query_count_helper()
     patch_v15_doctype_delete_cache()
+    initialize_frappe_pg_runtime()
     runner = SelectedTestRunner(site=args.site, group=args.group)
     # v15 runs during ParallelTestRunner.__init__; v16+ separates construction
     # from execution behind setup_and_run().
