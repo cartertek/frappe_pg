@@ -1,6 +1,6 @@
 import inspect
-import unittest
 import types
+import unittest
 from datetime import time as datetime_time
 from datetime import timedelta
 from unittest.mock import Mock, patch
@@ -1760,7 +1760,7 @@ class TestTransformQueryHook(unittest.TestCase):
 
 class TestPostgresAutomaticIndexDropPatch(unittest.TestCase):
     def test_drop_index_columns_are_temporarily_namespaced(self):
-        from frappe_pg.patches.v1 import fix_postgres_automatic_index_drop as patch_module
+        from frappe_pg.compat.frappe import postgres_automatic_index_drop as patch_module
 
         seen = []
 
@@ -1772,7 +1772,7 @@ class TestPostgresAutomaticIndexDropPatch(unittest.TestCase):
         with unittest.mock.patch.object(patch_module, "_load_postgres_table", return_value=table_class):
             patch_module._original_alter = None
             patch_module._patched_alter = None
-            self.assertTrue(patch_module.apply_postgres_automatic_index_drop_patch())
+            self.assertTrue(patch_module.apply())
             col = types.SimpleNamespace(fieldname="middle_name")
             table = types.SimpleNamespace(table_name="tabUser", drop_index=[col])
             self.assertEqual(table_class.alter(table), "ok")

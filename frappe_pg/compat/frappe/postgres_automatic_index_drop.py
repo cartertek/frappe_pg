@@ -2,6 +2,7 @@
 
 import inspect
 
+NAME = "frappe_postgres_automatic_index_drop"
 _original_alter = None
 _patched_alter = None
 
@@ -22,12 +23,21 @@ def _needs_patch(function):
     return 'DROP INDEX IF EXISTS "{col.fieldname}"' in source
 
 
-def apply_postgres_automatic_index_drop_patch():
-    """Drop the table-qualified automatic index names created by frappe_pg."""
+def is_applied():
+    table = _load_postgres_table()
+    return table is not None and _patched_alter is not None and table.alter is _patched_alter
+
+
+def is_needed():
+    table = _load_postgres_table()
+    return table is not None and not is_applied() and _needs_patch(table.alter)
+
+
+def apply():
     global _original_alter, _patched_alter
 
     table = _load_postgres_table()
-    if table is None or (_patched_alter is not None and table.alter is _patched_alter):
+    if table is None or is_applied():
         return False
     if not _needs_patch(table.alter):
         return False
@@ -50,4 +60,16 @@ def apply_postgres_automatic_index_drop_patch():
 
     _patched_alter = compatible_alter
     table.alter = compatible_alter  # nosemgrep
+    return True
+
+
+def remove():
+    global _original_alter, _patched_alter
+
+    table = _load_postgres_table()
+    if table is None or not is_applied():
+        return False
+    table.alter = _original_alter  # nosemgrep
+    _original_alter = None
+    _patched_alter = None
     return True

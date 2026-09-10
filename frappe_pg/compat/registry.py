@@ -13,6 +13,7 @@ from frappe_pg.compat.erpnext import (
 )
 from frappe_pg.compat.frappe import (
     goal_aggregation,
+    postgres_automatic_index_drop,
     postgres_boolean_values,
     postgres_date_functions,
     postgres_decimal_metadata,
@@ -23,6 +24,7 @@ from frappe_pg.compat.frappe import (
 
 _COMPATIBILITY_OVERRIDES = (
     goal_aggregation,
+    postgres_automatic_index_drop,
     postgres_boolean_values,
     postgres_date_functions,
     postgres_decimal_metadata,
