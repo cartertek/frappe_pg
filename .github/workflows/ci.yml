@@ -594,11 +594,9 @@ jobs:
           bench --site test_site set-config mail_login "test@example.com"
           bench --site test_site set-config mail_password test
           bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
-          # HRMS needs ERPNext's bootstrap/global test records, but not ERPNext's
-          # app-specific before_tests state. Persist that intermediate fixture.
-          cd sites
-          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext --phase hrms-base
-          cd ..
+          # HRMS and ERPNext v16 shards must start from installed ERPNext state
+          # before test-only bootstrap data is created. ERPNext v15 then prewarms
+          # its documented before_tests/global dependencies; v16 has neither.
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/erpnext_base.dump"
           cd sites
           ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext
@@ -764,11 +762,9 @@ jobs:
           bench --site test_site set-config mail_login "test@example.com"
           bench --site test_site set-config mail_password test
           bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
-          # HRMS needs ERPNext's bootstrap/global test records, but not ERPNext's
-          # app-specific before_tests state. Persist that intermediate fixture.
-          cd sites
-          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext --phase hrms-base
-          cd ..
+          # HRMS and ERPNext v16 shards must start from installed ERPNext state
+          # before test-only bootstrap data is created. ERPNext v15 then prewarms
+          # its documented before_tests/global dependencies; v16 has neither.
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/erpnext_base.dump"
           cd sites
           ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app erpnext
