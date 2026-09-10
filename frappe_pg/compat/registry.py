@@ -12,6 +12,7 @@ from frappe_pg.compat.erpnext import (
     pick_list_lock,
     stock_reservation_grouping,
     stock_reservation_lock,
+    stock_reserved_qty,
     trends_group_by,
 )
 from frappe_pg.compat.frappe import (
@@ -46,6 +47,7 @@ _COMPATIBILITY_OVERRIDES = (
     stock_reservation_grouping,
     pick_list_lock,
     stock_reservation_lock,
+    stock_reserved_qty,
 )
 
 
