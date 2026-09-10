@@ -359,13 +359,19 @@ def normalize_mysql_strpos_case_truthiness(query):
 
 
 def normalize_postgres_unix_timestamp_epoch(query):
-    """Match MariaDB UNIX_TIMESTAMP integer-second results for Frappe's PG mapper."""
-    return re.sub(
-        r'(?P<expr>EXTRACT\s*\(\s*EPOCH\s+FROM\s+[^)]+\))',
-        r'CAST(\g<expr> AS BIGINT)',
-        query,
-        flags=re.IGNORECASE,
+    """Match MariaDB UNIX_TIMESTAMP integer-second results for Frappe's PG mapper.
+
+    Frappe can generate ``EXTRACT(EPOCH FROM DATE(...))`` as well as a bare
+    field expression.  Match the nested DATE call as one operand and do not
+    wrap an expression that is already inside CAST(), keeping the transform
+    idempotent.
+    """
+    pattern = re.compile(
+        r'(?<!CAST\()(?P<expr>EXTRACT\s*\(\s*EPOCH\s+FROM\s+'
+        r'(?:DATE\s*\([^()]+\)|[^()]+?)\s*\))',
+        re.IGNORECASE,
     )
+    return pattern.sub(r'CAST(\g<expr> AS BIGINT)', query)
 
 
 def convert_mysql_date_arithmetic(query):

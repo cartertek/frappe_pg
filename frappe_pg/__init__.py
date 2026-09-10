@@ -89,3 +89,12 @@ try:
 except Exception:
     # ERPNext might not be installed or available yet.
     pass
+
+# Keep automatic PostgreSQL index create/drop names symmetric.
+try:
+    from frappe_pg.patches.v1.fix_postgres_automatic_index_drop import (
+        apply_postgres_automatic_index_drop_patch,
+    )
+    apply_postgres_automatic_index_drop_patch()
+except Exception:
+    pass
