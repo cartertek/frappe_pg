@@ -112,6 +112,7 @@ class TestPostgresQueryValueCompatibility(unittest.TestCase):
         cases = [
             ('"disposal_date"=%(param1)s', {"param1": ""}, '"disposal_date" IS NULL'),
             ('"expiry_date"=%(param3)s', {"param3": ""}, '"expiry_date" IS NULL'),
+            ('"end_of_life"=%(param2)s', {"param2": "0000-00-00"}, '"end_of_life" IS NULL'),
         ]
         for query, values, expected in cases:
             with self.subTest(query=query):
