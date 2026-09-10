@@ -287,6 +287,13 @@ jobs:
             --db-root-username postgres \
             --db-root-password root \
             --admin-password admin
+          # Preserve a neutral installed-Frappe database for downstream apps.
+          # Frappe's before_tests hook must run while Frappe is the only installed
+          # app; otherwise it intentionally skips setup_complete().
+          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/frappe_base.dump"
+          cd sites
+          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app frappe
+          cd ..
           bench --site test_site install-app frappe_pg
           bench --site test_site set-config allow_tests 1 --parse
           bench --site test_site set-config server_script_enabled 1 --parse
@@ -297,12 +304,6 @@ jobs:
           bench --site test_site set-config mail_login "test@example.com"
           bench --site test_site set-config mail_password test
           bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
-          # ERPNext must start from installed Frappe state, before Frappe's own
-          # before_tests/global User records alter application test semantics.
-          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/frappe_base.dump"
-          cd sites
-          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app frappe
-          cd ..
           sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
 
@@ -406,6 +407,13 @@ jobs:
             --db-root-username postgres \
             --db-root-password root \
             --admin-password admin
+          # Preserve a neutral installed-Frappe database for downstream apps.
+          # Frappe's before_tests hook must run while Frappe is the only installed
+          # app; otherwise it intentionally skips setup_complete().
+          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/frappe_base.dump"
+          cd sites
+          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app frappe
+          cd ..
           bench --site test_site install-app frappe_pg
           bench --site test_site set-config allow_tests 1 --parse
           bench --site test_site set-config server_script_enabled 1 --parse
@@ -416,12 +424,6 @@ jobs:
           bench --site test_site set-config mail_login "test@example.com"
           bench --site test_site set-config mail_password test
           bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
-          # ERPNext must start from installed Frappe state, before Frappe's own
-          # before_tests/global User records alter application test semantics.
-          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/frappe_base.dump"
-          cd sites
-          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app frappe
-          cd ..
           sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
 
@@ -508,11 +510,12 @@ jobs:
           frappe.init(site="test_site")
           frappe.connect()
           apps = frappe.get_installed_apps()
-          assert "frappe" in apps, apps
-          assert "frappe_pg" in apps, apps
-          frappe.db.get_single_value("System Settings", "language")
-          print("Restored Frappe fixture verified:", ", ".join(apps))
+          assert apps == ["frappe"], apps
+          print("Restored neutral Frappe fixture verified:", ", ".join(apps))
           PYVERIFY
+          rm -f test_site/.test_records.jsonl
+          cd ..
+          bench --site test_site install-app frappe_pg
       - name: Fetch application dependencies
         working-directory: /home/runner/frappe-bench
         run: |
@@ -686,11 +689,12 @@ jobs:
           frappe.init(site="test_site")
           frappe.connect()
           apps = frappe.get_installed_apps()
-          assert "frappe" in apps, apps
-          assert "frappe_pg" in apps, apps
-          frappe.db.get_single_value("System Settings", "language")
-          print("Restored Frappe fixture verified:", ", ".join(apps))
+          assert apps == ["frappe"], apps
+          print("Restored neutral Frappe fixture verified:", ", ".join(apps))
           PYVERIFY
+          rm -f test_site/.test_records.jsonl
+          cd ..
+          bench --site test_site install-app frappe_pg
       - name: Fetch application dependencies
         working-directory: /home/runner/frappe-bench
         run: |
@@ -842,6 +846,7 @@ jobs:
           CREATE DATABASE test_frappe OWNER test_frappe;
           SQL
           PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/erpnext_base.dump"
+          rm -f /home/runner/frappe-bench/sites/test_site/.test_records.jsonl
           cd /home/runner/frappe-bench/sites
           ../env/bin/python - <<'PYBASE'
           import frappe
@@ -931,6 +936,7 @@ jobs:
           CREATE DATABASE test_frappe OWNER test_frappe;
           SQL
           PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/erpnext_base.dump"
+          rm -f /home/runner/frappe-bench/sites/test_site/.test_records.jsonl
           cd /home/runner/frappe-bench/sites
           ../env/bin/python - <<'PYBASE'
           import frappe
@@ -1505,7 +1511,7 @@ jobs:
           check-latest: true
 
       - name: Install test system dependencies
-        if: matrix.test_group == 'remainder-1' || matrix.test_group == 'remainder-3' || matrix.test_group == 'remainder-4' || matrix.test_group == 'remainder-10'
+        if: matrix.test_group == 'remainder-1' || matrix.test_group == 'remainder-2' || matrix.test_group == 'remainder-3' || matrix.test_group == 'remainder-4' || matrix.test_group == 'remainder-10'
         run: |
           wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
           sudo apt-get update -qq
@@ -1780,7 +1786,7 @@ jobs:
           check-latest: true
 
       - name: Install test system dependencies
-        if: matrix.test_group == 'remainder-1' || matrix.test_group == 'remainder-3' || matrix.test_group == 'remainder-4' || matrix.test_group == 'remainder-10'
+        if: matrix.test_group == 'remainder-1' || matrix.test_group == 'remainder-2' || matrix.test_group == 'remainder-3' || matrix.test_group == 'remainder-4' || matrix.test_group == 'remainder-10'
         run: |
           wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
           sudo apt-get update -qq
