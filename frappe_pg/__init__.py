@@ -37,3 +37,12 @@ try:
 except Exception:
     # Frappe/ERPNext might not be fully available yet during installation.
     pass
+
+# Keep automatic PostgreSQL index create/drop names symmetric.
+try:
+    from frappe_pg.patches.v1.fix_postgres_automatic_index_drop import (
+        apply_postgres_automatic_index_drop_patch,
+    )
+    apply_postgres_automatic_index_drop_patch()
+except Exception:
+    pass

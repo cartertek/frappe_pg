@@ -1,5 +1,6 @@
 import inspect
 import unittest
+import types
 from datetime import time as datetime_time
 from datetime import timedelta
 from unittest.mock import Mock, patch
@@ -253,6 +254,13 @@ class TestQueryTransformers(unittest.TestCase):
             normalize_postgres_unix_timestamp_epoch(query),
             'SELECT CAST(EXTRACT(EPOCH FROM "posting_date") AS BIGINT) FROM "tabStock Ledger Entry"',
         )
+
+    def test_postgres_unix_timestamp_epoch_handles_nested_date_idempotently(self):
+        query = 'SELECT EXTRACT(EPOCH FROM DATE("creation")) FROM "tabEnergy Point Log"'
+        expected = 'SELECT CAST(EXTRACT(EPOCH FROM DATE("creation")) AS BIGINT) FROM "tabEnergy Point Log"'
+        transformed = normalize_postgres_unix_timestamp_epoch(query)
+        self.assertEqual(transformed, expected)
+        self.assertEqual(normalize_postgres_unix_timestamp_epoch(transformed), expected)
 
     def test_mysql_date_sub_curdate_from_erpnext_dashboard(self):
         query = "transaction_date > date_sub(curdate(), interval 1 year)"
@@ -1749,3 +1757,24 @@ class TestTransformQueryHook(unittest.TestCase):
         self.assertFalse(status["sql_patched"])
         self.assertFalse(status["commit_patched"])
         self.assertFalse(status["rollback_patched"])
+
+class TestPostgresAutomaticIndexDropPatch(unittest.TestCase):
+    def test_drop_index_columns_are_temporarily_namespaced(self):
+        from frappe_pg.patches.v1 import fix_postgres_automatic_index_drop as patch_module
+
+        seen = []
+
+        def old_alter(self):
+            seen.extend(col.fieldname for col in self.drop_index)
+            return "ok"
+
+        table_class = type("FakePostgresTable", (), {"alter": old_alter})
+        with unittest.mock.patch.object(patch_module, "_load_postgres_table", return_value=table_class):
+            patch_module._original_alter = None
+            patch_module._patched_alter = None
+            self.assertTrue(patch_module.apply_postgres_automatic_index_drop_patch())
+            col = types.SimpleNamespace(fieldname="middle_name")
+            table = types.SimpleNamespace(table_name="tabUser", drop_index=[col])
+            self.assertEqual(table_class.alter(table), "ok")
+            self.assertEqual(seen, ["tabUser_middle_name_index"])
+            self.assertEqual(col.fieldname, "middle_name")
