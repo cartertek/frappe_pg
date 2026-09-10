@@ -94,8 +94,21 @@ def apply():
         self._frappe_pg_insert_savepoint = save_point
         try:
             result = _original_db_insert(self, *args, **kwargs)
-        except Exception:
+        except Exception as exc:
             frappe.db.rollback(save_point=save_point)
+
+            # A field-based autoname can also be marked unique. PostgreSQL may
+            # report that redundant unique index before the primary-key index,
+            # causing Frappe to raise UniqueValidationError even though the
+            # semantic collision is the document name itself. Preserve Frappe's
+            # DuplicateEntryError contract for that narrow redundant-constraint
+            # shape while leaving ordinary unique-field violations untouched.
+            autoname = getattr(getattr(self, "meta", None), "autoname", "") or ""
+            if autoname.startswith("field:") and isinstance(exc, frappe.UniqueValidationError):
+                fieldname = autoname.split(":", 1)[1]
+                field = getattr(getattr(self, "meta", None), "get_field", lambda _name: None)(fieldname)
+                if field and getattr(field, "unique", False) and self.name == self.get(fieldname):
+                    raise frappe.DuplicateEntryError(self.doctype, self.name, exc) from exc
             raise
         else:
             frappe.db.release_savepoint(save_point)

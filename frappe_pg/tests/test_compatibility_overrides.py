@@ -240,6 +240,80 @@ class TestUniqueInsertTransactionCompatibility(unittest.TestCase):
             self.assertTrue(unique_insert_transaction.remove())
             self.assertIs(document.db_insert, old_insert)
 
+    def test_field_autoname_unique_collision_maps_to_duplicate_entry(self):
+        from frappe_pg.compat.frappe import unique_insert_transaction
+
+        class UniqueValidationError(Exception):
+            pass
+
+        class DuplicateEntryError(Exception):
+            pass
+
+        def old_insert(self, *args, **kwargs):
+            raise UniqueValidationError("duplicate event")
+
+        document = types.SimpleNamespace(db_insert=old_insert)
+        event_field = types.SimpleNamespace(unique=True)
+        meta = types.SimpleNamespace(
+            autoname="field:event",
+            fields=[event_field],
+            get_field=lambda name: event_field if name == "event" else None,
+        )
+        doc = types.SimpleNamespace(
+            doctype="HR Telemetry Milestone",
+            name="_test_claim",
+            meta=meta,
+            get=lambda name: "_test_claim" if name == "event" else None,
+        )
+        fake_db = Mock(db_type="postgres")
+        fake_frappe = types.ModuleType("frappe")
+        fake_frappe.db = fake_db
+        fake_frappe.UniqueValidationError = UniqueValidationError
+        fake_frappe.DuplicateEntryError = DuplicateEntryError
+
+        with (
+            patch.object(unique_insert_transaction, "_load_base_document", return_value=document),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
+        ):
+            self.assertTrue(unique_insert_transaction.apply())
+            with self.assertRaises(DuplicateEntryError):
+                document.db_insert(doc)
+
+        fake_db.rollback.assert_called_once()
+
+    def test_non_autoname_unique_collision_keeps_unique_validation_error(self):
+        from frappe_pg.compat.frappe import unique_insert_transaction
+
+        class UniqueValidationError(Exception):
+            pass
+
+        class DuplicateEntryError(Exception):
+            pass
+
+        def old_insert(self, *args, **kwargs):
+            raise UniqueValidationError("duplicate ordinary field")
+
+        document = types.SimpleNamespace(db_insert=old_insert)
+        field = types.SimpleNamespace(unique=True)
+        doc = types.SimpleNamespace(
+            doctype="Example",
+            name="EX-1",
+            meta=types.SimpleNamespace(autoname=None, fields=[field]),
+        )
+        fake_db = Mock(db_type="postgres")
+        fake_frappe = types.ModuleType("frappe")
+        fake_frappe.db = fake_db
+        fake_frappe.UniqueValidationError = UniqueValidationError
+        fake_frappe.DuplicateEntryError = DuplicateEntryError
+
+        with (
+            patch.object(unique_insert_transaction, "_load_base_document", return_value=document),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
+        ):
+            self.assertTrue(unique_insert_transaction.apply())
+            with self.assertRaises(UniqueValidationError):
+                document.db_insert(doc)
+
     def test_hash_autoname_retry_rolls_back_before_recursive_insert(self):
         from frappe_pg.compat.frappe import unique_insert_transaction
 
