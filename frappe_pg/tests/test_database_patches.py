@@ -56,6 +56,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_gl_stock_account_value_grouping,
     normalize_erpnext_grouped_gl_financial_fields,
     normalize_erpnext_irs_1099_grouping,
+    normalize_erpnext_item_attribute_numeric_literal,
     normalize_erpnext_item_end_of_life_zero_date,
     normalize_erpnext_landed_cost_center_aggregate,
     normalize_erpnext_mode_of_payment_grouping,
@@ -1311,6 +1312,18 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
             '"ss"."docstatus"= \'1\' AND "sd"."parenttype"=%(param1)s'
         )
         self.assertEqual(convert_mysql_update_join(query), expected)
+
+    def test_unaliased_quoted_mysql_update_join(self):
+        query = """UPDATE "tabItem Variant Attribute" JOIN "tabItem" ON "tabItem"."name"="tabItem Variant Attribute"."parent" SET "attribute_value"=CASE WHEN "tabItem Variant Attribute"."attribute_value"='Large' THEN 'Larger' ELSE "tabItem Variant Attribute"."attribute_value" END WHERE "tabItem"."variant_of" IS NOT NULL AND "tabItem Variant Attribute"."attribute"='Test Size'"""
+        expected = """UPDATE "tabItem Variant Attribute" SET "attribute_value"=CASE WHEN "tabItem Variant Attribute"."attribute_value"='Large' THEN 'Larger' ELSE "tabItem Variant Attribute"."attribute_value" END FROM "tabItem" WHERE "tabItem"."name"="tabItem Variant Attribute"."parent" AND "tabItem"."variant_of" IS NOT NULL AND "tabItem Variant Attribute"."attribute"='Test Size'"""
+        self.assertEqual(convert_mysql_update_join(query), expected)
+        self.assertEqual(convert_mysql_update_join(expected), expected)
+
+    def test_item_variant_attribute_numeric_literal_is_quoted(self):
+        query = """SELECT t1.parent FROM "tabItem Variant Attribute" t1 WHERE attribute = 'Test Item Length' and attribute_value = 1.1 GROUP BY t1.parent"""
+        expected = """SELECT t1.parent FROM "tabItem Variant Attribute" t1 WHERE attribute = 'Test Item Length' and attribute_value = '1.1' GROUP BY t1.parent"""
+        self.assertEqual(normalize_erpnext_item_attribute_numeric_literal(query), expected)
+        self.assertEqual(normalize_erpnext_item_attribute_numeric_literal(expected), expected)
 
     def test_complex_update_join_is_left_unchanged(self):
         query = (
