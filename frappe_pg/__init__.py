@@ -98,3 +98,11 @@ try:
     apply_postgres_automatic_index_drop_patch()
 except Exception:
     pass
+
+# Apply ERPNext PostgreSQL-safe manufacturing grouping semantics.
+try:
+    from frappe_pg.patches.v1.fix_erpnext_manufacturing_grouping import apply_manufacturing_grouping_patch
+
+    apply_manufacturing_grouping_patch()
+except Exception:
+    pass

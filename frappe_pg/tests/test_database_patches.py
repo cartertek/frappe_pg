@@ -1,6 +1,6 @@
 import inspect
-import unittest
 import types
+import unittest
 from datetime import time as datetime_time
 from datetime import timedelta
 from unittest.mock import Mock, patch
@@ -107,6 +107,16 @@ class TestPostgresResultCompatibility(unittest.TestCase):
     def test_non_time_cells_are_untouched(self):
         rows = [(datetime_time(8, 30),)]
         self.assertEqual(_normalize_time_cells(rows, [Mock(type_code=25)]), rows)
+
+    def test_postgres_time_column_metadata_matches_frappe_time_definition(self):
+        columns = [
+            frappe._dict(name="time", type="time without time zone"),
+            frappe._dict(name="name", type="varchar(140)"),
+        ]
+        with patch.object(database_patches, "_original_get_table_columns_description", return_value=columns):
+            result = database_patches.patched_get_table_columns_description(Mock(), "tabEvent Notifications")
+        self.assertEqual(result[0].type, "time(6)")
+        self.assertEqual(result[1].type, "varchar(140)")
 
 
 class TestQueryTransformers(unittest.TestCase):
@@ -1602,6 +1612,7 @@ class TestTransformQueryHook(unittest.TestCase):
         self.assertFalse(status["sql_patched"])
         self.assertFalse(status["commit_patched"])
         self.assertFalse(status["rollback_patched"])
+
 
 class TestPostgresAutomaticIndexDropPatch(unittest.TestCase):
     def test_drop_index_columns_are_temporarily_namespaced(self):
