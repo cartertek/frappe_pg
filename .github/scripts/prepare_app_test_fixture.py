@@ -39,6 +39,18 @@ def main():
             if importlib.util.find_spec(bootstrap_module) is not None:
                 print("Running ERPNext bootstrap test data setup")
                 frappe.get_module(bootstrap_module)
+            else:
+                # ERPNext v15 predates BootStrapTestData. Seed the same preset
+                # prerequisites needed by its global test records without running
+                # setup_complete()/ERPNext before_tests, which would create the
+                # unrelated Wind Power LLC test company.
+                from frappe.desk.page.setup_wizard.install_fixtures import update_genders, update_salutations
+                from erpnext.setup.setup_wizard.operations.install_fixtures import install
+
+                print("Running ERPNext v15 preset fixture setup")
+                update_genders()
+                update_salutations()
+                install("India")
 
         test_module = frappe.get_module(f"{args.app}.tests")
         for doctype in getattr(test_module, "global_test_dependencies", ()):
