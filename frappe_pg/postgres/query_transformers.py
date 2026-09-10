@@ -367,8 +367,7 @@ def normalize_postgres_unix_timestamp_epoch(query):
     idempotent.
     """
     pattern = re.compile(
-        r'(?<!CAST\()(?P<expr>EXTRACT\s*\(\s*EPOCH\s+FROM\s+'
-        r'(?:DATE\s*\([^()]+\)|[^()]+?)\s*\))',
+        r'(?<!CAST\()(?P<expr>EXTRACT\s*\(\s*EPOCH\s+FROM\s+' r'(?:DATE\s*\([^()]+\)|[^()]+?)\s*\))',
         re.IGNORECASE,
     )
     return pattern.sub(r'CAST(\g<expr> AS BIGINT)', query)
@@ -1874,32 +1873,61 @@ def normalize_postgres_update_target_alias(query):
     return f'{match.group("prefix")}AS {alias}{match.group("set")}{body}{match.group("where")}'
 
 
-def convert_mysql_update_join(query):
-    """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
+def normalize_erpnext_item_attribute_numeric_literal(query):
+    """Quote legacy numeric literals compared with Item attribute varchar values."""
+    if not re.search(r'\bFROM\s+"?tabItem (?:Variant Attribute|Attribute Value)"?', query, re.IGNORECASE):
+        return query
+    return re.sub(
+        r'(?P<field>(?:(?:"?tabItem (?:Variant Attribute|Attribute Value)"?|[A-Za-z_][A-Za-z0-9_]*)\.)?"?attribute_value"?)'
+        r'(?P<op>\s*=\s*)(?P<value>-?\d+(?:\.\d+)?)\b',
+        lambda match: f"{match.group('field')}{match.group('op')}'{match.group('value')}'",
+        query,
+        flags=re.IGNORECASE,
+    )
 
-    Handles the single-inner-join form emitted by Frappe Query Builder and used
-    by application migration patches. More complex multi-join UPDATE statements
-    are intentionally left unchanged rather than guessed at.
-    """
-    pattern = re.compile(
+
+def convert_mysql_update_join(query):
+    """Convert simple one-table MySQL ``UPDATE ... JOIN`` forms to PostgreSQL ``FROM``."""
+    aliased = re.compile(
         rf'^\s*UPDATE\s+(?P<target>{_QUOTED_IDENTIFIER})\s+(?P<target_alias>"[^"]+")\s+'
         rf'JOIN\s+(?P<joined>{_QUOTED_IDENTIFIER})\s+(?P<joined_alias>"[^"]+")\s+'
         r'ON\s+(?P<join_condition>.+?)\s+SET\s+(?P<set_clause>.+?)\s+WHERE\s+(?P<where_clause>.+?)\s*;?\s*$',
         re.IGNORECASE | re.DOTALL,
     )
-    match = pattern.match(query)
+    match = aliased.match(query)
+    if match:
+        if re.search(r"\bJOIN\b", match.group("join_condition"), re.IGNORECASE):
+            return query
+        target_alias = match.group("target_alias")
+        set_clause = re.sub(
+            r'(?<![\w"])' + re.escape(target_alias) + r'\.',
+            "",
+            match.group("set_clause"),
+        )
+        return (
+            f'UPDATE {match.group("target")} AS {target_alias} '
+            f'SET {set_clause} FROM {match.group("joined")} AS {match.group("joined_alias")} '
+            f'WHERE {match.group("join_condition")} AND {match.group("where_clause")}'
+        )
+
+    unaliased = re.compile(
+        rf'^\s*UPDATE\s+(?P<target>{_QUOTED_IDENTIFIER})\s+'
+        rf'JOIN\s+(?P<joined>{_QUOTED_IDENTIFIER})\s+'
+        r'ON\s+(?P<join_condition>.+?)\s+SET\s+(?P<set_clause>.+?)\s+WHERE\s+(?P<where_clause>.+?)\s*;?\s*$',
+        re.IGNORECASE | re.DOTALL,
+    )
+    match = unaliased.match(query)
     if not match or re.search(r"\bJOIN\b", match.group("join_condition"), re.IGNORECASE):
         return query
 
-    target_alias = match.group("target_alias")
+    target = match.group("target")
     set_clause = re.sub(
-        r'(?<![\w"])' + re.escape(target_alias) + r'\.',
-        '',
+        re.escape(target) + r'\.',
+        "",
         match.group("set_clause"),
     )
     return (
-        f'UPDATE {match.group("target")} AS {target_alias} '
-        f'SET {set_clause} FROM {match.group("joined")} AS {match.group("joined_alias")} '
+        f'UPDATE {target} SET {set_clause} FROM {match.group("joined")} '
         f'WHERE {match.group("join_condition")} AND {match.group("where_clause")}'
     )
 
@@ -2892,6 +2920,7 @@ def apply_all_query_transformations(query):
     query = normalize_erpnext_sales_analytics_literals(query)
     query = normalize_erpnext_sales_order_delay_alias(query)
     query = normalize_erpnext_literal_timestamp_subtraction(query)
+    query = normalize_erpnext_item_attribute_numeric_literal(query)
     query = normalize_erpnext_reserved_warehouse_distinct(query)
     query = convert_erpnext_modified_timediff(query)
     query = normalize_postgres_update_target_alias(query)
