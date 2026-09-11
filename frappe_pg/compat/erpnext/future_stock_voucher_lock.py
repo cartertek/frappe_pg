@@ -1,7 +1,7 @@
 """Backport ERPNext's PostgreSQL-safe future-stock-voucher locking semantics."""
 
 import inspect
-from datetime import datetime, time, timedelta
+from datetime import datetime
 from importlib import import_module
 
 NAME = "erpnext_future_stock_voucher_lock"
@@ -60,14 +60,10 @@ def is_needed():
 
 
 def _time_parameter(value):
-    """Convert MariaDB-style TIME timedelta values to a PostgreSQL time value."""
-    if not isinstance(value, timedelta):
-        return value
-    total_microseconds = int(value.total_seconds() * 1_000_000) % (24 * 60 * 60 * 1_000_000)
-    hours, remainder = divmod(total_microseconds, 60 * 60 * 1_000_000)
-    minutes, remainder = divmod(remainder, 60 * 1_000_000)
-    seconds, microseconds = divmod(remainder, 1_000_000)
-    return time(hours, minutes, seconds, microseconds)
+    """Normalize Frappe TIME values to ``datetime.time`` across v15/v16."""
+    from frappe.utils import get_time
+
+    return get_time(value)
 
 
 def _compatible_get_future_stock_vouchers(
