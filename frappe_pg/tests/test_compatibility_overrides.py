@@ -518,10 +518,10 @@ class TestBatchValuationLockCompatibility(unittest.TestCase):
             return child.type_of_transaction.isin(["Inward", "Outward"])  # noqa: F821
 
         def fixed_method(self):
-            if frappe.db.db_type == "postgres":
-                child_query.select(child.name).where(conditions).for_update().run()  # noqa: F821
+            query = grouped.where(conditions).groupby(child.batch_no)  # noqa: F821
             if frappe.db.db_type != "postgres":
-                return grouped.for_update()  # noqa: F821
+                query = query.for_update()
+            return query
 
         self.assertTrue(batch_valuation_lock._legacy_shape_supported(old_method))
         self.assertFalse(batch_valuation_lock._upstream_is_compatible(old_method))
