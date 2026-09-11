@@ -815,3 +815,29 @@ class TestStockAgeingPostgresCursorCompatibility(unittest.TestCase):
             self.assertEqual(events.count("process-B"), 1)
             self.assertTrue(stock_ageing_postgres_cursor.remove())
             self.assertIs(FIFOSlots.generate, original)
+
+
+class TestProductBundleBalanceGroupingCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import product_bundle_balance_grouping
+
+        product_bundle_balance_grouping._original = None
+        product_bundle_balance_grouping._patched = None
+
+    def test_applies_only_to_grouped_query_that_selects_unused_name(self):
+        from frappe_pg.compat.erpnext import product_bundle_balance_grouping
+
+        def old(filters, items):
+            query = sle.select(sle.item_code, sle.warehouse, sle.name, Max(sle.posting_datetime))  # noqa: F821
+            return query.groupby(sle.item_code, sle.warehouse)  # noqa: F821
+
+        module = types.SimpleNamespace(get_item_wise_max_posting_datetime=old)
+        with patch.object(product_bundle_balance_grouping, "_load", return_value=module):
+            self.assertTrue(product_bundle_balance_grouping.is_needed())
+            self.assertTrue(product_bundle_balance_grouping.apply())
+            self.assertIs(
+                module.get_item_wise_max_posting_datetime, product_bundle_balance_grouping._compatible
+            )
+            self.assertFalse(product_bundle_balance_grouping.apply())
+            self.assertTrue(product_bundle_balance_grouping.remove())
+            self.assertIs(module.get_item_wise_max_posting_datetime, old)
