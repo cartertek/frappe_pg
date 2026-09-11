@@ -1075,6 +1075,155 @@ def convert_mysql_inner_join_without_condition(query):
     return pattern.sub(replace, query)
 
 
+def normalize_hrms_legacy_string_literals(query):
+    """Translate identifier-shaped string literals in two legacy HRMS raw queries.
+
+    PostgreSQL treats double quotes as identifiers. Older HRMS raw SQL uses
+    them for the ``Approved`` expense-claim status and the ``earnings`` salary
+    detail parentfield. Restrict these rewrites to their exact table/query
+    contexts rather than treating arbitrary identifier-shaped tokens as strings.
+    """
+    if re.search(
+        r'\bFROM\s+"tabExpense Claim Advance"\s+eca\s*,\s*"tabExpense Claim"\s+ec', query, re.IGNORECASE
+    ):
+        query = re.sub(
+            r'\bec\.approval_status\s*=\s*"Approved"',
+            "ec.approval_status='Approved'",
+            query,
+            flags=re.IGNORECASE,
+        )
+
+    if re.search(r'\bFROM\s+"tabSalary Slip"\s+ss\s*,\s*"tabSalary Detail"\s+sd', query, re.IGNORECASE):
+        query = re.sub(
+            r'\bsd\.parentfield\s*=\s*"earnings"',
+            "sd.parentfield='earnings'",
+            query,
+            flags=re.IGNORECASE,
+        )
+
+    # Older HRMS raw SQL uses MySQL single-quoted output aliases, for example
+    # employee_name AS 'name' and SUM(...) AS 'total_amount'. PostgreSQL needs
+    # identifier aliases. Keep this constrained to known HRMS table families.
+    if re.search(
+        r'\bFROM\s+"tab(?:Employee|Employee Benefit Claim|Salary Slip|Salary Detail|Expense Claim(?: Advance)?)"',
+        query,
+        re.IGNORECASE,
+    ):
+        query = re.sub(
+            r"\bAS\s+'(?P<alias>[A-Za-z_][A-Za-z0-9_]*)'",
+            lambda match: f'AS "{match.group("alias")}"',
+            query,
+            flags=re.IGNORECASE,
+        )
+    return query
+
+
+def normalize_hrms_employee_event_date_parts(query):
+    """Cast HRMS v15 employee-reminder date parameters for PostgreSQL DATE_PART."""
+    if not re.search(r'\bFROM\s+"tabEmployee"', query, re.IGNORECASE):
+        return query
+    if not re.search(
+        r'DATE_PART\s*\(\s*\'day\'\s*,\s*(?:date_of_birth|date_of_joining)\s*\)', query, re.IGNORECASE
+    ):
+        return query
+    return re.sub(
+        r"date_part\s*\(\s*'(?P<part>day|month|year)'\s*,\s*(?P<param>%\([A-Za-z_][A-Za-z0-9_]*\)s)\s*\)",
+        lambda match: f"date_part('{match.group('part')}', CAST({match.group('param')} AS date))",
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_hrms_work_anniversary_date_projection(query):
+    """Backport HRMS v16's date_of_joining projection to the v15 PostgreSQL reminder query."""
+    if not re.search(r'\bFROM\s+"tabEmployee"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'DATE_PART\s*\(\s*\'day\'\s*,\s*date_of_joining\s*\)', query, re.IGNORECASE):
+        return query
+    select_match = re.search(r'\bSELECT\b(?P<select>.+?)\bFROM\b', query, re.IGNORECASE | re.DOTALL)
+    if not select_match or re.search(
+        r'(?<![A-Za-z0-9_])"?date_of_joining"?(?![A-Za-z0-9_])', select_match.group("select"), re.IGNORECASE
+    ):
+        return query
+    replacement = select_match.group(0)[:-4].rstrip() + ', "date_of_joining" FROM'
+    return query[: select_match.start()] + replacement + query[select_match.end() :]
+
+
+def normalize_hrms_staffing_plan_aggregate(query):
+    """Group HRMS's legacy staffing-plan aggregate by every projected dimension."""
+    required = (
+        r'\bSELECT\s+DISTINCT\s+spd\.parent\s*,',
+        r'\bFROM\s+"tabStaffing Plan Detail"\s+spd\s*,\s*"tabStaffing Plan"\s+sp',
+        r'\bSUM\s*\(\s*spd\.vacancies\s*\)',
+        r'\bspd\.designation\b',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE | re.DOTALL) for pattern in required):
+        return query
+    if re.search(r'\bGROUP\s+BY\b', query, re.IGNORECASE):
+        return query
+    return query.rstrip() + " GROUP BY spd.parent, sp.from_date, sp.to_date, sp.name, spd.designation"
+
+
+def normalize_hrms_income_tax_salary_slip_grouping(query):
+    """Aggregate the unused Salary Slip name in HRMS's grouped exemption query."""
+    required = (
+        r'\bFROM\s+"tabSalary Slip"',
+        r'\b(?:INNER\s+)?JOIN\s+"tabSalary Detail"',
+        r'\bSUM\s*\(\s*"tabSalary Detail"\."amount"\s*\)',
+        r'\bGROUP\s+BY\s+"tabSalary Slip"\."employee"\s*,\s*"tabSalary Detail"\."salary_component"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE | re.DOTALL) for pattern in required):
+        return query
+    return re.sub(
+        r'(?P<name>"tabSalary Slip"\."name")(?P<comma>\s*,)',
+        r'MIN(\g<name>) AS "name"\g<comma>',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_hrms_shift_assignment_empty_end_date(query):
+    """Treat HRMS Shift Assignment empty end dates as NULL on PostgreSQL.
+
+    MariaDB tolerates comparing a Date column to the empty string. PostgreSQL
+    does not. Restrict the rewrite to HRMS's Shift Assignment ``end_date``
+    predicates, where the application already treats NULL and empty as the same
+    open-ended value.
+    """
+    if not re.search(r'\bFROM\s+"tabShift Assignment"', query, re.IGNORECASE):
+        return query
+    literal_pattern = re.compile(
+        r'(?P<field>(?:"tabShift Assignment"\.)?"end_date")\s*=\s*\'\'',
+        re.IGNORECASE,
+    )
+    query = literal_pattern.sub(r'\g<field> IS NULL', query)
+    parameter_pattern = re.compile(
+        r'(?P<field>(?:"tabShift Assignment"\.)?"end_date")\s*=\s*%\([A-Za-z_][A-Za-z0-9_]*\)s',
+        re.IGNORECASE,
+    )
+    return parameter_pattern.sub(r'\g<field> IS NULL', query)
+
+
+def normalize_hrms_skill_assessment_group_order(query):
+    """Aggregate HRMS Skill Assessment idx when ordering a grouped rating query."""
+    required = (
+        r'\bFROM\s+"tabSkill Assessment"',
+        r'AVG\s*\(\s*"tabSkill Assessment"\."rating"\s*\)',
+        r'GROUP\s+BY\s+"tabSkill Assessment"\."skill"',
+        r'ORDER\s+BY\s+"tabSkill Assessment"\."idx"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    return re.sub(
+        r'ORDER\s+BY\s+("tabSkill Assessment"\."idx")',
+        r'ORDER BY MIN(\1)',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
 def normalize_erpnext_production_plan_subitems_grouping(query):
     """Make ERPNext's grouped Production Plan sub-item query PostgreSQL-valid.
 
@@ -1881,6 +2030,53 @@ def convert_erpnext_modified_timediff(query):
     left = match.group("left")
     right = match.group("right")
     return f"SELECT (CAST({left} AS timestamp) - CAST({right} AS timestamp))"
+
+
+def normalize_hrms_reserved_user_alias(query):
+    """Quote HRMS's legacy ``user`` alias, which is reserved by PostgreSQL."""
+    if not re.search(r'\bFROM\s+"tabHas Role"\s+has_role', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bLEFT\s+JOIN\s+"tabUser"\s+user\b', query, re.IGNORECASE):
+        return query
+    query = re.sub(r'(\bLEFT\s+JOIN\s+"tabUser"\s+)user\b', r'\1"user"', query, flags=re.IGNORECASE)
+    return re.sub(r'(?<!["A-Za-z0-9_])user\.', '"user".', query, flags=re.IGNORECASE)
+
+
+def normalize_hrms_shift_attendance_grouping(query):
+    """Preserve one Attendance row while aggregating functionally-dependent joined values.
+
+    The legacy report groups by Attendance.name to collapse joined check-in rows,
+    while selecting check-in shift boundaries and Shift Type flags outside the
+    GROUP BY. MariaDB permits that; PostgreSQL does not. These values are constant
+    for an attendance/shift, so MAX preserves the legacy single-row shape.
+    """
+    required = (
+        r'\bFROM\s+"tabAttendance"',
+        r'\bJOIN\s+"tabShift Type"',
+        r'\bJOIN\s+"tabEmployee Checkin"',
+        r'\bGROUP\s+BY\s+"tabAttendance"\."name"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    fields = (
+        'shift_start',
+        'shift_end',
+        'shift_actual_start',
+        'shift_actual_end',
+        'enable_late_entry_marking',
+        'late_entry_grace_period',
+        'enable_early_exit_marking',
+        'early_exit_grace_period',
+    )
+    for field in fields:
+        query = re.sub(
+            rf'(?<!MAX\()(?P<expr>"tab(?:Employee Checkin|Shift Type)"\."{field}")',
+            rf'MAX(\g<expr>) AS "{field}"',
+            query,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return query
 
 
 def normalize_postgres_update_target_alias(query):
@@ -2902,6 +3098,15 @@ def apply_all_query_transformations(query):
     query = normalize_payment_request_single_match_grouping(query)
     query = cast_timestamp_pattern_matches(query)
     query = convert_mysql_inner_join_without_condition(query)
+    query = normalize_hrms_legacy_string_literals(query)
+    query = normalize_hrms_employee_event_date_parts(query)
+    query = normalize_hrms_work_anniversary_date_projection(query)
+    query = normalize_hrms_staffing_plan_aggregate(query)
+    query = normalize_hrms_income_tax_salary_slip_grouping(query)
+    query = normalize_hrms_shift_assignment_empty_end_date(query)
+    query = normalize_hrms_skill_assessment_group_order(query)
+    query = normalize_hrms_reserved_user_alias(query)
+    query = normalize_hrms_shift_attendance_grouping(query)
     query = normalize_erpnext_production_plan_subitems_grouping(query)
     query = normalize_erpnext_production_plan_explosion_grouping(query)
     query = normalize_erpnext_bank_clearance_journal_query(query)
