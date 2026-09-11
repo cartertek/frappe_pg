@@ -568,8 +568,8 @@ jobs:
           # preserves the dimension rows; PostgreSQL needs an explicit test-fixture commit.
           accounting_dimension_test = Path("apps/erpnext/erpnext/accounts/doctype/accounting_dimension/test_accounting_dimension.py")
           accounting_dimension_source = accounting_dimension_test.read_text()
-          accounting_marker = "\t\tdimension1.save()\n\n\n\ndef disable_dimension():\n"
-          accounting_replacement = "\t\tdimension1.save()\n\n\tfrappe.db.commit()  # PostgreSQL: preserve Accounting Dimension DDL test fixture state\n\n\ndef disable_dimension():\n"
+          accounting_marker = "\n\ndef disable_dimension():\n"
+          accounting_replacement = "\n\tfrappe.db.commit()  # PostgreSQL: preserve Accounting Dimension DDL test fixture state\n\n\ndef disable_dimension():\n"
           if accounting_replacement not in accounting_dimension_source:
               if accounting_marker not in accounting_dimension_source:
                   raise SystemExit("ERPNext v15 Accounting Dimension setup marker not found")
@@ -902,12 +902,18 @@ jobs:
 
           sales = Path("apps/erpnext/erpnext/accounts/doctype/sales_invoice/test_sales_invoice.py")
           source = sales.read_text()
-          old = "\t\tself.assertEqual(len(actual), 4)\n\t\tself.assertEqual(actual, expected)\n"
+          old_variants = (
+              "\t\tself.assertEqual(len(actual), 4)\n\t\tself.assertEqual(actual, expected)\n",
+              "\t\tself.assertEqual(len(actual), 4)\n\t\tself.assertEqual(expected, actual)\n",
+          )
           new = "\t\tself.assertEqual(len(actual), 4)\n\t\t# DB account collation isn't portable across MariaDB/Postgres; compare order-independently.\n\t\tself.assertCountEqual(actual, expected)\n"
           if new not in source:
-              if old not in source:
+              for old in old_variants:
+                  if old in source:
+                      sales.write_text(source.replace(old, new, 1))
+                      break
+              else:
                   raise SystemExit("ERPNext v16 opening invoice GL ordering marker not found")
-              sales.write_text(source.replace(old, new, 1))
 
           payment = Path("apps/erpnext/erpnext/accounts/doctype/payment_entry/test_payment_entry.py")
           source = payment.read_text()
