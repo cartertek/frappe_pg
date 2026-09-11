@@ -1,7 +1,7 @@
 """Backport ERPNext's PostgreSQL-safe future-stock-voucher locking semantics."""
 
 import inspect
-from datetime import time, timedelta
+from datetime import datetime, time, timedelta
 from importlib import import_module
 
 NAME = "erpnext_future_stock_voucher_lock"
@@ -74,44 +74,39 @@ def _compatible_get_future_stock_vouchers(
     posting_date, posting_time, for_warehouses=None, for_items=None, company=None
 ):
     import frappe
+    from frappe.query_builder.custom import ConstantColumn
+    from frappe.query_builder.functions import Min
+    from frappe.utils import getdate
 
-    values = [posting_date, _time_parameter(posting_time)]
-    conditions = []
+    posting_time = _time_parameter(posting_time)
+
+    SLE = frappe.qb.DocType("Stock Ledger Entry")
+    posting_datetime = SLE.posting_date + SLE.posting_time
+    threshold = datetime.combine(getdate(posting_date), posting_time)
+
+    conditions = (posting_datetime >= threshold) & (SLE.is_cancelled == 0)
     if for_items:
-        conditions.append("item_code in ({})".format(", ".join(["%s"] * len(for_items))))
-        values.extend(for_items)
+        conditions &= SLE.item_code.isin(for_items)
     if for_warehouses:
-        conditions.append("warehouse in ({})".format(", ".join(["%s"] * len(for_warehouses))))
-        values.extend(for_warehouses)
+        conditions &= SLE.warehouse.isin(for_warehouses)
     if company:
-        conditions.append("company = %s")
-        values.append(company)
-
-    extra_conditions = " and " + " and ".join(conditions) if conditions else ""
-    where_clause = f"""
-        (posting_date + posting_time) >= (CAST(%s AS date) + CAST(%s AS time))
-        and is_cancelled = 0
-        {extra_conditions}
-    """
+        conditions &= SLE.company == company
 
     # ERPNext develop locks the matching SLE rows separately because PostgreSQL
     # rejects FOR UPDATE on DISTINCT/GROUP BY queries. These locks remain held
     # for the surrounding transaction, preserving repost concurrency semantics.
-    frappe.db.sql(
-        f'SELECT 1 FROM "tabStock Ledger Entry" WHERE {where_clause} FOR UPDATE',
-        tuple(values),
-    )
+    frappe.qb.from_(SLE).select(ConstantColumn(1)).where(conditions).for_update().run()
 
     # Grouping preserves one result per voucher while MIN() retains the old
     # chronological ordering without expanding the DISTINCT key.
-    future_stock_vouchers = frappe.db.sql(
-        f'''SELECT voucher_type, voucher_no
-            FROM "tabStock Ledger Entry"
-            WHERE {where_clause}
-            GROUP BY voucher_type, voucher_no
-            ORDER BY MIN(posting_date + posting_time) ASC, MIN(creation) ASC''',
-        tuple(values),
-        as_dict=True,
+    future_stock_vouchers = (
+        frappe.qb.from_(SLE)
+        .select(SLE.voucher_type, SLE.voucher_no)
+        .where(conditions)
+        .groupby(SLE.voucher_type, SLE.voucher_no)
+        .orderby(Min(posting_datetime))
+        .orderby(Min(SLE.creation))
+        .run(as_dict=True)
     )
     return [(d.voucher_type, d.voucher_no) for d in future_stock_vouchers]
 
