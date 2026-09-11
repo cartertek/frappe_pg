@@ -997,6 +997,27 @@ class TestPostgresAutomaticIndexDropCompatibility(unittest.TestCase):
         self.assertEqual(patch_module._rewrite_automatic_drop(query, "tabUser"), query)
 
 
+class TestBOMStockAnalysisGroupingCompatibility(unittest.TestCase):
+    def test_producible_rows_preserve_legacy_positional_shape(self):
+        from frappe_pg.compat.erpnext import bom_stock_analysis_grouping
+
+        rows = [
+            types.SimpleNamespace(
+                item_code="ITEM-1",
+                from_bom_no="BOM-1",
+                qty_per_unit=2.0,
+                available_qty=10.0,
+                producible_qty=5.0,
+            )
+        ]
+        representative = {"ITEM-1": types.SimpleNamespace(description="Part one")}
+
+        self.assertEqual(
+            bom_stock_analysis_grouping._legacy_producible_rows(rows, representative),
+            [["ITEM-1", "Part one", "BOM-1", 2.0, 10.0, 5.0]],
+        )
+
+
 class TestFutureStockVoucherInputCompatibility(unittest.TestCase):
     def test_time_parameter_accepts_v15_string_and_timedelta(self):
         from frappe_pg.compat.erpnext import future_stock_voucher_lock

@@ -130,6 +130,24 @@ def _compatible_bom_data(filters):
     return module.explode_phantom_boms(data, filters) if include_bom_fields else data
 
 
+def _legacy_producible_rows(rows, representative):
+    """Preserve the positional row contract used by ERPNext v16 callers."""
+    result = []
+    for row in rows:
+        line = representative.get(row.item_code)
+        result.append(
+            [
+                row.item_code,
+                line.description if line else None,
+                row.from_bom_no,
+                row.qty_per_unit,
+                row.available_qty,
+                row.producible_qty,
+            ]
+        )
+    return result
+
+
 def _compatible_producible(filters):
     import frappe
     from frappe import _
@@ -180,10 +198,12 @@ def _compatible_producible(filters):
     )
     rows = query.run(as_dict=True)
     representative = _representative_lines("BOM Item", filters.get("bom"))
-    for row in rows:
-        line = representative.get(row.item_code)
-        row.description = line.description if line else None
-    return rows
+
+    # The legacy v16 caller indexes these rows positionally. ERPNext develop
+    # changed both this producer and its caller to dict rows in the same patch;
+    # backport only the PostgreSQL-safe query semantics here while preserving
+    # the installed caller's six-column list contract.
+    return _legacy_producible_rows(rows, representative)
 
 
 def is_applied():
