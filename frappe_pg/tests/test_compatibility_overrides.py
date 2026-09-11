@@ -1,6 +1,8 @@
 import sys
 import types
 import unittest
+from datetime import time as datetime_time
+from datetime import timedelta
 from unittest.mock import Mock, patch
 
 import frappe
@@ -993,3 +995,163 @@ class TestPostgresAutomaticIndexDropCompatibility(unittest.TestCase):
 
         query = 'DROP INDEX IF EXISTS "unique_email" ; DROP INDEX IF EXISTS "tabUser_middle_name_index" ;'
         self.assertEqual(patch_module._rewrite_automatic_drop(query, "tabUser"), query)
+
+
+class TestFutureStockVoucherInputCompatibility(unittest.TestCase):
+    def test_time_parameter_accepts_v15_string_and_timedelta(self):
+        from frappe_pg.compat.erpnext import future_stock_voucher_lock
+
+        self.assertEqual(future_stock_voucher_lock._time_parameter("00:00:00"), datetime_time(0, 0))
+        self.assertEqual(
+            future_stock_voucher_lock._time_parameter(timedelta(hours=12, minutes=34, seconds=56)),
+            datetime_time(12, 34, 56),
+        )
+
+
+class TestStockBalancePostgresCursorCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import stock_balance_postgres_cursor
+
+        stock_balance_postgres_cursor._original = None
+        stock_balance_postgres_cursor._patched = None
+        stock_balance_postgres_cursor._method_name = None
+
+    def test_v15_buffers_sle_rows_on_postgres(self):
+        from frappe_pg.compat.erpnext import stock_balance_postgres_cursor
+
+        events = []
+
+        class Query:
+            def run(self, as_dict=False, as_iterator=False):
+                events.append(("run", as_dict, as_iterator))
+                return [types.SimpleNamespace(item_code="A")]
+
+        class StockBalanceReport:
+            def get_item_warehouse_map(self):
+                with frappe.db.unbuffered_cursor():
+                    self.sle_entries = self.sle_query.run(as_dict=True, as_iterator=True)
+
+            def __init__(self):
+                self.filters = {}
+                self.sle_query = Query()
+                self.opening_data = {}
+                self.float_precision = 6
+                self.inventory_dimensions = []
+
+            def get_opening_vouchers(self):
+                return []
+
+            def prepare_stock_reco_voucher_wise_count(self):
+                events.append("prepare")
+
+            def get_group_by_key(self, entry):
+                return entry.item_code
+
+            def initialize_data(self, item_warehouse_map, key, entry):
+                item_warehouse_map[key] = []
+
+            def prepare_item_warehouse_map(self, item_warehouse_map, entry, key):
+                item_warehouse_map[key].append(entry.item_code)
+
+        module = types.SimpleNamespace(
+            StockBalanceReport=StockBalanceReport,
+            filter_items_with_no_transactions=lambda values, *_: values,
+        )
+        fake_frappe = types.SimpleNamespace(
+            db=types.SimpleNamespace(db_type="postgres"),
+            get_cached_doc=lambda *_: object(),
+        )
+        original = StockBalanceReport.get_item_warehouse_map
+        with (
+            patch.object(stock_balance_postgres_cursor, "_load", return_value=module),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
+        ):
+            self.assertTrue(stock_balance_postgres_cursor.apply())
+            result = StockBalanceReport().get_item_warehouse_map()
+            self.assertEqual(result, {"A": ["A"]})
+            self.assertIn(("run", True, False), events)
+            self.assertNotIn(("run", True, True), events)
+            self.assertTrue(stock_balance_postgres_cursor.remove())
+            self.assertIs(StockBalanceReport.get_item_warehouse_map, original)
+
+    def test_v16_buffers_sle_rows_on_postgres(self):
+        from frappe_pg.compat.erpnext import stock_balance_postgres_cursor
+
+        events = []
+
+        class Query:
+            def run(self, as_dict=False, as_iterator=False):
+                events.append(("run", as_dict, as_iterator))
+                return [types.SimpleNamespace(item_code="A")]
+
+        class StockBalanceReport:
+            def prepare_item_warehouse_map_for_current_period(self):
+                with frappe.db.unbuffered_cursor():
+                    self.sle_entries = self.sle_query.run(as_dict=True, as_iterator=True)
+
+            def __init__(self):
+                self.filters = {}
+                self.sle_query = Query()
+                self.item_warehouse_map = {}
+                self.float_precision = 6
+                self.inventory_dimensions = []
+
+            def get_opening_vouchers(self):
+                return []
+
+            def prepare_stock_reco_voucher_wise_count(self):
+                events.append("prepare")
+
+            def get_group_by_key(self, entry):
+                return entry.item_code
+
+            def initialize_data(self, key, entry):
+                self.item_warehouse_map[key] = []
+
+            def prepare_item_warehouse_map(self, entry, key):
+                self.item_warehouse_map[key].append(entry.item_code)
+
+        module = types.SimpleNamespace(
+            StockBalanceReport=StockBalanceReport,
+            filter_items_with_no_transactions=lambda values, *_: values,
+        )
+        fake_frappe = types.SimpleNamespace(
+            db=types.SimpleNamespace(db_type="postgres"),
+            get_cached_doc=lambda *_: object(),
+        )
+        with (
+            patch.object(stock_balance_postgres_cursor, "_load", return_value=module),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
+        ):
+            self.assertTrue(stock_balance_postgres_cursor.apply())
+            report = StockBalanceReport()
+            report.prepare_item_warehouse_map_for_current_period()
+            self.assertEqual(report.item_warehouse_map, {"A": ["A"]})
+            self.assertIn(("run", True, False), events)
+            self.assertNotIn(("run", True, True), events)
+            self.assertTrue(stock_balance_postgres_cursor.remove())
+
+
+class TestTotalStockSummaryGroupingCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import total_stock_summary_grouping
+
+        total_stock_summary_grouping._original = None
+        total_stock_summary_grouping._patched = None
+
+    def test_backports_develop_grouping_only_for_legacy_shape(self):
+        from frappe_pg.compat.erpnext import total_stock_summary_grouping
+
+        def legacy(filters):
+            query = query.select(item.item_code, item.description, Sum(bin.actual_qty)).groupby(  # noqa: F821
+                item.item_code  # noqa: F821
+            )
+            return query.run()
+
+        module = types.SimpleNamespace(get_total_stock=legacy)
+        with patch.object(total_stock_summary_grouping, "_load", return_value=module):
+            self.assertTrue(total_stock_summary_grouping.is_needed())
+            self.assertTrue(total_stock_summary_grouping.apply())
+            self.assertIs(module.get_total_stock, total_stock_summary_grouping._compatible)
+            self.assertTrue(total_stock_summary_grouping.remove())
+            self.assertIs(module.get_total_stock, legacy)
