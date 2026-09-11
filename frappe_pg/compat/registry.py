@@ -13,6 +13,7 @@ from frappe_pg.compat.erpnext import (
     period_closing_fiscal_year,
     period_closing_postgres_cursor,
     pick_list_lock,
+    process_loss_grouping,
     product_bundle_balance_grouping,
     sales_order_elapsed_time,
     stock_ageing_postgres_cursor,

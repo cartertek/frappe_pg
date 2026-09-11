@@ -1176,3 +1176,34 @@ class TestTotalStockSummaryGroupingCompatibility(unittest.TestCase):
             self.assertIs(module.get_total_stock, total_stock_summary_grouping._compatible)
             self.assertTrue(total_stock_summary_grouping.remove())
             self.assertIs(module.get_total_stock, legacy)
+
+
+class TestProcessLossGroupingCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import process_loss_grouping
+
+        process_loss_grouping._original = None
+        process_loss_grouping._patched = None
+
+    def test_detects_legacy_grouped_work_order_query_and_restores(self):
+        from frappe_pg.compat.erpnext import process_loss_grouping
+
+        def old(filters):
+            query = (
+                frappe.qb.from_(wo)  # noqa: F821
+                .select(
+                    wo.name,  # noqa: F821
+                    Sum(se.total_incoming_value),  # noqa: F821
+                )
+                .groupby(se.work_order)  # noqa: F821
+            )
+            return query.run(as_dict=True)
+
+        module = types.SimpleNamespace(get_data=old)
+        with patch.object(process_loss_grouping, "_load", return_value=module):
+            self.assertTrue(process_loss_grouping.is_needed())
+            self.assertTrue(process_loss_grouping.apply())
+            self.assertIs(module.get_data, process_loss_grouping._compatible_get_data)
+            self.assertFalse(process_loss_grouping.apply())
+            self.assertTrue(process_loss_grouping.remove())
+            self.assertIs(module.get_data, old)
