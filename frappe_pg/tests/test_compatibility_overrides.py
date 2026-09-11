@@ -893,3 +893,52 @@ class TestAccountsReceivableGLBalanceCompatibility(unittest.TestCase):
             self.assertIs(module.get_gl_balance, accounts_receivable_gl_balance._compatible)
             self.assertTrue(accounts_receivable_gl_balance.remove())
             self.assertIs(module.get_gl_balance, old)
+
+
+class TestPeriodClosingPostgresCursorCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import period_closing_postgres_cursor
+
+        period_closing_postgres_cursor._original = None
+        period_closing_postgres_cursor._patched = None
+
+    def test_postgres_buffers_gl_rows_and_restores_original(self):
+        from frappe_pg.compat.erpnext import period_closing_postgres_cursor
+
+        events = []
+
+        class PeriodClosingVoucher:
+            def get_account_balances_based_on_dimensions(self, report_type):
+                with frappe.db.unbuffered_cursor():  # noqa: F821
+                    return self.get_gl_entries_for_current_period(report_type, as_iterator=True)
+
+            def get_accounting_dimension_fields(self):
+                events.append("dimensions")
+
+            def get_gl_entries_for_current_period(
+                self, report_type, only_opening_entries=False, as_iterator=False
+            ):
+                events.append((report_type, only_opening_entries, as_iterator))
+                return [types.SimpleNamespace(value=1), types.SimpleNamespace(value=2)]
+
+            def set_account_balance_dict(self, gle, acc):
+                acc[gle.value] = True
+                return acc
+
+            def is_first_period_closing_voucher(self):
+                return False
+
+        module = types.SimpleNamespace(PeriodClosingVoucher=PeriodClosingVoucher)
+        fake_frappe = types.SimpleNamespace(db=types.SimpleNamespace(db_type="postgres"), _dict=dict)
+        original = PeriodClosingVoucher.get_account_balances_based_on_dimensions
+        with (
+            patch.object(period_closing_postgres_cursor, "_load", return_value=module),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
+        ):
+            self.assertTrue(period_closing_postgres_cursor.is_needed())
+            self.assertTrue(period_closing_postgres_cursor.apply())
+            result = PeriodClosingVoucher().get_account_balances_based_on_dimensions("Profit and Loss")
+            self.assertEqual(result, {1: True, 2: True})
+            self.assertIn(("Profit and Loss", False, False), events)
+            self.assertTrue(period_closing_postgres_cursor.remove())
+            self.assertIs(PeriodClosingVoucher.get_account_balances_based_on_dimensions, original)

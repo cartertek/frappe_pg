@@ -11,6 +11,7 @@ from frappe_pg.compat.erpnext import (
     payment_ledger_grouping,
     payment_terms_status,
     period_closing_fiscal_year,
+    period_closing_postgres_cursor,
     pick_list_lock,
     product_bundle_balance_grouping,
     sales_order_elapsed_time,
