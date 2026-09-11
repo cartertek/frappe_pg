@@ -2,6 +2,7 @@
 
 from frappe_pg.compat.erpnext import (
     accounts_receivable_gl_balance,
+    available_serial_no_empty_serials,
     batch_valuation_advisory_lock,
     batch_valuation_lock,
     bom_stock_analysis_grouping,
@@ -51,6 +52,7 @@ _COMPATIBILITY_OVERRIDES = (
     sales_order_elapsed_time,
     period_closing_fiscal_year,
     period_closing_postgres_cursor,
+    available_serial_no_empty_serials,
     batch_valuation_lock,
     batch_valuation_advisory_lock,
     future_stock_voucher_lock,
