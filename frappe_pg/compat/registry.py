@@ -1,8 +1,74 @@
 """Registry for narrowly scoped application-level PostgreSQL compatibility overrides."""
 
-from frappe_pg.compat.erpnext import trends_group_by
+from frappe_pg.compat.erpnext import (
+    accounts_receivable_gl_balance,
+    available_serial_no_empty_serials,
+    batch_valuation_advisory_lock,
+    batch_valuation_lock,
+    bom_stock_analysis_grouping,
+    future_stock_voucher_lock,
+    manufacturing_grouping,
+    opening_invoice_savepoint,
+    payment_ledger_grouping,
+    payment_terms_status,
+    period_closing_fiscal_year,
+    period_closing_postgres_cursor,
+    pick_list_lock,
+    process_loss_grouping,
+    product_bundle_balance_grouping,
+    sales_order_elapsed_time,
+    stock_ageing_postgres_cursor,
+    stock_balance_postgres_cursor,
+    stock_reservation_grouping,
+    stock_reservation_lock,
+    stock_reserved_qty,
+    total_stock_summary_grouping,
+    trends_group_by,
+)
+from frappe_pg.compat.frappe import (
+    goal_aggregation,
+    postgres_automatic_index_drop,
+    postgres_boolean_values,
+    postgres_date_functions,
+    postgres_decimal_metadata,
+    postgres_unique_violation,
+    schema_type_conversion,
+    unique_insert_transaction,
+)
 
-_COMPATIBILITY_OVERRIDES = (trends_group_by,)
+_COMPATIBILITY_OVERRIDES = (
+    accounts_receivable_gl_balance,
+    goal_aggregation,
+    postgres_automatic_index_drop,
+    postgres_boolean_values,
+    postgres_date_functions,
+    postgres_decimal_metadata,
+    postgres_unique_violation,
+    schema_type_conversion,
+    unique_insert_transaction,
+    trends_group_by,
+    payment_ledger_grouping,
+    payment_terms_status,
+    sales_order_elapsed_time,
+    period_closing_fiscal_year,
+    period_closing_postgres_cursor,
+    available_serial_no_empty_serials,
+    batch_valuation_lock,
+    batch_valuation_advisory_lock,
+    future_stock_voucher_lock,
+    manufacturing_grouping,
+    opening_invoice_savepoint,
+    bom_stock_analysis_grouping,
+    stock_ageing_postgres_cursor,
+    stock_balance_postgres_cursor,
+    stock_reservation_grouping,
+    pick_list_lock,
+    process_loss_grouping,
+    product_bundle_balance_grouping,
+    stock_reservation_lock,
+    stock_reserved_qty,
+    total_stock_summary_grouping,
+)
 
 
 def apply_compatibility_overrides():
