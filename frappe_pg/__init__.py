@@ -25,14 +25,15 @@ __license__ = "MIT"
 try:
     from frappe_pg.postgres.database_patches import apply_postgres_fixes
     apply_postgres_fixes()
-except Exception as e:
-    # During installation, frappe might not be fully initialized
-    print(f"frappe_pg: Will apply database patches later: {e}")
+except Exception:
+    # During installation, Frappe might not be fully initialized yet.
+    pass
 
-# Apply ERPNext trends.py patch for GROUP BY compatibility
+# Apply application-level PostgreSQL compatibility overrides.
 try:
-    from frappe_pg.patches.v1.fix_erpnext_trends import apply_trends_patch
-    apply_trends_patch()
-except Exception as e:
-    # ERPNext might not be installed or available yet
-    print(f"frappe_pg: Will apply trends patch later: {e}")
+    from frappe_pg.compat import apply_compatibility_overrides
+
+    apply_compatibility_overrides()
+except Exception:
+    # Frappe/ERPNext might not be fully available yet during installation.
+    pass
