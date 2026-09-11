@@ -16,9 +16,11 @@ from frappe_pg.compat.erpnext import (
     product_bundle_balance_grouping,
     sales_order_elapsed_time,
     stock_ageing_postgres_cursor,
+    stock_balance_postgres_cursor,
     stock_reservation_grouping,
     stock_reservation_lock,
     stock_reserved_qty,
+    total_stock_summary_grouping,
     trends_group_by,
 )
 from frappe_pg.compat.frappe import (
@@ -54,11 +56,13 @@ _COMPATIBILITY_OVERRIDES = (
     manufacturing_grouping,
     bom_stock_analysis_grouping,
     stock_ageing_postgres_cursor,
+    stock_balance_postgres_cursor,
     stock_reservation_grouping,
     pick_list_lock,
     product_bundle_balance_grouping,
     stock_reservation_lock,
     stock_reserved_qty,
+    total_stock_summary_grouping,
 )
 
 
