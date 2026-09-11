@@ -888,13 +888,24 @@ class TestQueryTransformers(unittest.TestCase):
             convert_mysql_timestamp_pair('SELECT TIMESTAMP("posting_date") FROM t'),
             'SELECT TIMESTAMP("posting_date") FROM t',
         )
+        repost_query = (
+            "UPDATE `tabRepost Item Valuation` SET status='Skipped' "
+            "WHERE TIMESTAMP(posting_date, posting_time) > "
+            "TIMESTAMP(%(posting_date)s, %(posting_time)s)"
+        )
+        transformed = convert_mysql_timestamp_pair(repost_query)
+        self.assertIn(
+            "(posting_date + posting_time) > "
+            "(CAST(%(posting_date)s AS date) + CAST(%(posting_time)s AS time))",
+            transformed,
+        )
         self.assertEqual(
             convert_mysql_timestamp_pair("SELECT timestamp(%s, %s)"),
-            "SELECT (%s + %s)",
+            "SELECT (CAST(%s AS date) + CAST(%s AS time))",
         )
         self.assertEqual(
             convert_mysql_timestamp_pair("SELECT timestamp(%(date)s, %(time)s)"),
-            "SELECT (%(date)s + %(time)s)",
+            "SELECT (CAST(%(date)s AS date) + CAST(%(time)s AS time))",
         )
 
     def test_work_order_return_grouping_includes_original_item(self):
