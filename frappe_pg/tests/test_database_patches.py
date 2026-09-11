@@ -593,6 +593,16 @@ class TestQueryTransformers(unittest.TestCase):
             'SELECT CASE WHEN (dont_reserve_qty_on_return <> 0) THEN so_item_returned_qty ELSE 0 END',
         )
 
+    def test_numeric_truthiness_rewrites_or_integer_literal(self):
+        for literal, boolean in (("0", "FALSE"), ("1", "TRUE")):
+            query = f'SELECT CASE WHEN "produced_qty"<"qty" OR {literal} THEN "produced_qty" ELSE "qty" END'
+            expected = (
+                f'SELECT CASE WHEN "produced_qty"<"qty" OR {boolean} THEN "produced_qty" ELSE "qty" END'
+            )
+            with self.subTest(literal=literal):
+                self.assertEqual(convert_numeric_truthiness(query), expected)
+                self.assertEqual(convert_numeric_truthiness(expected), expected)
+
     def test_numeric_truthiness_case_when_leaves_real_conditions_unchanged(self):
         cases = [
             'SELECT CASE WHEN amount > 0 THEN 1 ELSE 0 END',
