@@ -513,7 +513,7 @@ jobs:
           assert apps == ["frappe"], apps
           print("Restored neutral Frappe fixture verified:", ", ".join(apps))
           PYVERIFY
-          rm -f test_site/.test_records.jsonl
+          rm -f test_site/.test_records.jsonl test_site/.test_log
           cd ..
           bench --site test_site install-app frappe_pg
       - name: Fetch application dependencies
@@ -563,6 +563,20 @@ jobs:
               else:
                   raise SystemExit("ERPNext inventory-dimension test helper marker not found")
 
+          # Accounting Dimension creation adds Custom Fields (DDL) and then the POS test
+          # deliberately triggers a validation rollback. MariaDB's implicit DDL commit
+          # preserves the dimension rows; PostgreSQL needs an explicit test-fixture commit.
+          accounting_dimension_test = Path("apps/erpnext/erpnext/accounts/doctype/accounting_dimension/test_accounting_dimension.py")
+          accounting_dimension_source = accounting_dimension_test.read_text()
+          accounting_marker = "\t\tdimension1.save()\n\n\n\ndef disable_dimension():\n"
+          accounting_replacement = "\t\tdimension1.save()\n\n\tfrappe.db.commit()  # PostgreSQL: preserve Accounting Dimension DDL test fixture state\n\n\ndef disable_dimension():\n"
+          if accounting_replacement not in accounting_dimension_source:
+              if accounting_marker not in accounting_dimension_source:
+                  raise SystemExit("ERPNext v15 Accounting Dimension setup marker not found")
+              accounting_dimension_test.write_text(
+                  accounting_dimension_source.replace(accounting_marker, accounting_replacement, 1)
+              )
+
           # ERPNext v15 creates Supplier.pan once in setUpClass and then rolls
           # back after each test. MariaDB's updatedb DDL implicitly commits the
           # class setup; PostgreSQL DDL is transactional, so preserve the
@@ -588,6 +602,50 @@ jobs:
               if old not in source:
                   raise SystemExit("ERPNext v15 Purchase Invoice GL helper marker not found")
               purchase_invoice_test.write_text(source.replace(old, new, 1))
+          PYFIX
+
+      - name: Backport v15 database-order-neutral assertions
+        working-directory: /home/runner/frappe-bench
+        run: |
+          python - <<'PYFIX'
+          from pathlib import Path
+
+          bank = Path("apps/erpnext/erpnext/accounts/doctype/bank_transaction/test_bank_transaction.py")
+          source = bank.read_text()
+          old = '        self.assertTrue(linked_payments[0]["party"] == "Conrad Electronic")'.replace("        ", "\t\t")
+          new = '        self.assertIn("Conrad Electronic", [payment["party"] for payment in linked_payments])'.replace("        ", "\t\t")
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("ERPNext v15 Bank Transaction ordering marker not found")
+              bank.write_text(source.replace(old, new, 1))
+
+          journal = Path("apps/erpnext/erpnext/accounts/doctype/journal_entry/test_journal_entry.py")
+          source = journal.read_text()
+          old = """\t\tgl_entries = query.run(as_dict=True)\n\n\t\tfor i in range(len(self.expected_gle)):\n\t\t\tfor field in self.fields:\n\t\t\t\tself.assertEqual(self.expected_gle[i][field], gl_entries[i][field])\n"""
+          new = """\t\tgl_entries = query.run(as_dict=True)\n\n\t\t# MariaDB and Postgres collate `account` differently, so the DB ordering isn't portable;\n\t\t# sort both sides identically before the positional comparison.\n\t\tdef _key(row):\n\t\t\treturn tuple(str(row[f]) for f in self.fields)\n\n\t\tgl_entries = sorted(gl_entries, key=_key)\n\t\texpected_gle = sorted(self.expected_gle, key=_key)\n\t\tfor i in range(len(expected_gle)):\n\t\t\tfor field in self.fields:\n\t\t\t\tself.assertEqual(expected_gle[i][field], gl_entries[i][field])\n"""
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("ERPNext v15 Journal Entry GL marker not found")
+              journal.write_text(source.replace(old, new, 1))
+
+          asset = Path("apps/erpnext/erpnext/assets/doctype/asset/test_asset.py")
+          source = asset.read_text()
+          if 'frappe.get_doc("Item", "Macbook Pro")' not in source and 'frappe.get_doc("Item", "MacBook Pro")' in source:
+              source = source.replace('frappe.get_doc("Item", "MacBook Pro")', 'frappe.get_doc("Item", "Macbook Pro")')
+          start = source.index("\tdef test_cwip_accounting(")
+          end = source.find("\n\tdef ", start + 1)
+          block = source[start:] if end < 0 else source[start:end]
+          for old_assert, new_assert in [
+              ("\t\tself.assertSequenceEqual(pr_gle, expected_gle)\n", "\t\tself.assertCountEqual(pr_gle, expected_gle)\n"),
+              ("\t\tself.assertSequenceEqual(pi_gle, expected_gle)\n", "\t\tself.assertCountEqual(pi_gle, expected_gle)\n"),
+              ("\t\tself.assertSequenceEqual(gle, expected_gle)\n", "\t\tself.assertCountEqual(gle, expected_gle)\n"),
+          ]:
+              if new_assert not in block:
+                  if old_assert not in block:
+                      raise SystemExit(f"ERPNext v15 Asset CWIP assertion marker missing: {old_assert.strip()}")
+                  block = block.replace(old_assert, new_assert, 1)
+          source = source[:start] + block + ("" if end < 0 else source[end:])
+          asset.write_text(source)
           PYFIX
 
       - name: Expose v15 Period Closing Voucher test failures
@@ -626,7 +684,7 @@ jobs:
           # Each shard runs the app's native before_tests/global dependencies (or
           # v16 bootstrap imports) in its own fresh process. Keep the filesystem
           # test-record journal consistent with this installed-only database.
-          rm -f sites/test_site/.test_records.jsonl
+          rm -f sites/test_site/.test_records.jsonl sites/test_site/.test_log
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/erpnext_base.dump"
           sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
           cp "$RUNNER_TEMP/erpnext_base.dump" "$RUNNER_TEMP/test_frappe.dump"
@@ -717,7 +775,7 @@ jobs:
           assert apps == ["frappe"], apps
           print("Restored neutral Frappe fixture verified:", ", ".join(apps))
           PYVERIFY
-          rm -f test_site/.test_records.jsonl
+          rm -f test_site/.test_records.jsonl test_site/.test_log
           cd ..
           bench --site test_site install-app frappe_pg
       - name: Fetch application dependencies
@@ -836,6 +894,31 @@ jobs:
           sales_invoice_test.write_text(sales_invoice_source)
           PYFIX
 
+      - name: Backport v16 remaining database-order-neutral assertions
+        working-directory: /home/runner/frappe-bench
+        run: |
+          python - <<'PYFIX'
+          from pathlib import Path
+
+          sales = Path("apps/erpnext/erpnext/accounts/doctype/sales_invoice/test_sales_invoice.py")
+          source = sales.read_text()
+          old = "\t\tself.assertEqual(len(actual), 4)\n\t\tself.assertEqual(actual, expected)\n"
+          new = "\t\tself.assertEqual(len(actual), 4)\n\t\t# DB account collation isn't portable across MariaDB/Postgres; compare order-independently.\n\t\tself.assertCountEqual(actual, expected)\n"
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("ERPNext v16 opening invoice GL ordering marker not found")
+              sales.write_text(source.replace(old, new, 1))
+
+          payment = Path("apps/erpnext/erpnext/accounts/doctype/payment_entry/test_payment_entry.py")
+          source = payment.read_text()
+          old = """\t\tfor row in range(len(self.expected_gle)):\n\t\t\tfor field in ["account", "debit", "credit"]:\n\t\t\t\tself.assertEqual(self.expected_gle[row][field], gl_entries[row][field])\n"""
+          new = """\t\t# MariaDB and Postgres collate `account` differently, so the DB ordering isn't portable;\n\t\t# sort both sides identically before the positional comparison.\n\t\tfields = ["account", "debit", "credit"]\n\n\t\tdef _key(row):\n\t\t\treturn tuple(str(row[f]) for f in fields)\n\n\t\tgl_entries = sorted(gl_entries, key=_key)\n\t\texpected_gle = sorted(self.expected_gle, key=_key)\n\t\tfor row in range(len(expected_gle)):\n\t\t\tfor field in fields:\n\t\t\t\tself.assertEqual(expected_gle[row][field], gl_entries[row][field])\n"""
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("ERPNext v16 Payment Entry GL ordering marker not found")
+              payment.write_text(source.replace(old, new, 1))
+          PYFIX
+
       - name: Instrument ERPNext v16 install timing
         working-directory: /home/runner/frappe-bench
         run: python "$GITHUB_WORKSPACE/.github/scripts/instrument_erpnext_install.py"
@@ -861,7 +944,7 @@ jobs:
           # Each shard runs the app's native before_tests/global dependencies (or
           # v16 bootstrap imports) in its own fresh process. Keep the filesystem
           # test-record journal consistent with this installed-only database.
-          rm -f sites/test_site/.test_records.jsonl
+          rm -f sites/test_site/.test_records.jsonl sites/test_site/.test_log
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/erpnext_base.dump"
           sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
           cp "$RUNNER_TEMP/erpnext_base.dump" "$RUNNER_TEMP/test_frappe.dump"
@@ -936,7 +1019,7 @@ jobs:
           CREATE DATABASE test_frappe OWNER test_frappe;
           SQL
           PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/erpnext_base.dump"
-          rm -f /home/runner/frappe-bench/sites/test_site/.test_records.jsonl
+          rm -f /home/runner/frappe-bench/sites/test_site/.test_records.jsonl /home/runner/frappe-bench/sites/test_site/.test_log
           cd /home/runner/frappe-bench/sites
           ../env/bin/python - <<'PYBASE'
           import frappe
@@ -953,10 +1036,60 @@ jobs:
         run: |
           bench get-app --branch "version-15" hrms https://github.com/frappe/hrms.git
           bench setup requirements --dev hrms
+          # Backport HRMS v15 PostgreSQL-portable test expectations already present
+          # Backport HRMS v15 PostgreSQL-portable test expectations
+          # in current HRMS tests where the v15 branch carries stale assumptions.
+          python - <<'PYFIX'
+          from pathlib import Path
+
+          salary_component = Path("apps/hrms/hrms/payroll/doctype/salary_component/test_salary_component.py")
+          source = salary_component.read_text()
+          old_formula = '\t\tsalary_component.update_salary_structures("formula", "BS*.3")\n'
+          new_formula = (
+              '\t\tsalary_component.amount_based_on_formula = True\n'
+              '\t\tsalary_component.update_salary_structures("formula", "BS*.3")\n'
+          )
+          if new_formula not in source:
+              if old_formula not in source:
+                  raise SystemExit("HRMS v15 Salary Component formula marker not found")
+              salary_component.write_text(source.replace(old_formula, new_formula, 1))
+
+          payroll = Path("apps/hrms/hrms/payroll/doctype/payroll_entry/test_payroll_entry.py")
+          source = payroll.read_text()
+          old_je = "\t\tself.assertEqual(je_entries, expected_je)\n"
+          new_je = "\t\tself.assertEqual(sorted(je_entries), sorted(expected_je))\n"
+          if new_je not in source:
+              if old_je not in source:
+                  raise SystemExit("HRMS v15 payroll JE ordering marker not found")
+              source = source.replace(old_je, new_je, 1)
+          old_debit = "\t\tself.assertEqual(debit_entries, expected_entries)\n"
+          new_debit = "\t\tkey = lambda row: tuple(str(row.get(field)) for field in (\"party\", \"account\", \"cost_center\", \"debit\", \"credit\"))\n\t\tself.assertEqual(sorted(debit_entries, key=key), sorted(expected_entries, key=key))\n"
+          if new_debit not in source:
+              if old_debit not in source:
+                  raise SystemExit("HRMS v15 payroll bank-entry ordering marker not found")
+              source = source.replace(old_debit, new_debit, 1)
+          payroll.write_text(source)
+
+          roster = Path("apps/hrms/hrms/tests/test_roster.py")
+          source = roster.read_text()
+          old_filter = '\t\t\t\t"docstatus": ["!=", 2],\n'
+          new_filter = '\t\t\t\t"docstatus": 1,\n'
+          if new_filter not in source:
+              if old_filter not in source:
+                  raise SystemExit("HRMS v15 roster docstatus assertion marker not found")
+              source = source.replace(old_filter, new_filter, 1)
+          old_assert = "\t\tself.assertTrue(new_assignment)\n"
+          new_assert = "\t\trows = frappe.get_all(\"Shift Assignment\", filters={\"employee\": employee.name}, fields=[\"name\", \"start_date\", \"end_date\", \"docstatus\", \"status\", \"shift_type\"])\n\t\tself.assertTrue(new_assignment, rows)\n"
+          if new_assert not in source:
+              if old_assert not in source:
+                  raise SystemExit("HRMS v15 roster diagnostic assertion marker not found")
+              source = source.replace(old_assert, new_assert, 1)
+          roster.write_text(source)
+          PYFIX
           bench --site test_site install-app hrms
           # Match upstream CI: snapshot installed HRMS before app-global test setup.
           # Each fresh shard runs HRMS before_tests and its file dependencies once.
-          rm -f sites/test_site/.test_records.jsonl
+          rm -f sites/test_site/.test_records.jsonl sites/test_site/.test_log
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
       - name: Pack reusable HRMS fixture
         run: tar -C /home/runner -cf "$RUNNER_TEMP/frappe-bench.tar" frappe-bench
@@ -1026,7 +1159,7 @@ jobs:
           CREATE DATABASE test_frappe OWNER test_frappe;
           SQL
           PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/erpnext_base.dump"
-          rm -f /home/runner/frappe-bench/sites/test_site/.test_records.jsonl
+          rm -f /home/runner/frappe-bench/sites/test_site/.test_records.jsonl /home/runner/frappe-bench/sites/test_site/.test_log
           cd /home/runner/frappe-bench/sites
           ../env/bin/python - <<'PYBASE'
           import frappe
@@ -1087,17 +1220,24 @@ jobs:
 
           roster = Path("apps/hrms/hrms/tests/test_roster.py")
           source = roster.read_text()
+          old_filter = '\t\t\t\t"docstatus": ["!=", 2],\n'
+          new_filter = '\t\t\t\t"docstatus": 1,\n'
+          if new_filter not in source:
+              if old_filter not in source:
+                  raise SystemExit("HRMS v16 roster docstatus assertion marker not found")
+              source = source.replace(old_filter, new_filter, 1)
           old = "\t\tself.assertTrue(new_assignment)\n"
           new = "\t\trows = frappe.get_all(\"Shift Assignment\", filters={\"employee\": employee.name}, fields=[\"name\", \"start_date\", \"end_date\", \"docstatus\", \"status\", \"shift_type\"])\n\t\tself.assertTrue(new_assignment, rows)\n"
           if new not in source:
               if old not in source:
                   raise SystemExit("HRMS roster diagnostic assertion marker not found")
-              roster.write_text(source.replace(old, new, 1))
+              source = source.replace(old, new, 1)
+          roster.write_text(source)
           PYFIX
           bench --site test_site install-app hrms
           # Match upstream CI: snapshot installed HRMS before app-global test setup.
           # Each fresh shard runs HRMS before_tests and its file dependencies once.
-          rm -f sites/test_site/.test_records.jsonl
+          rm -f sites/test_site/.test_records.jsonl sites/test_site/.test_log
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
       - name: Pack reusable HRMS fixture
         run: tar -C /home/runner -cf "$RUNNER_TEMP/frappe-bench.tar" frappe-bench
