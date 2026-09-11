@@ -3,6 +3,8 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
+import frappe
+
 from frappe_pg.compat.erpnext import trends_group_by
 
 
@@ -131,7 +133,7 @@ class TestSchemaTypeConversionCompatibility(unittest.TestCase):
             return self.query()
 
         def new_alter(self):
-            if frappe.db.is_data_truncated(Exception()):  # noqa: F821
+            if frappe.db.is_data_truncated(Exception()):
                 return "Incompatible Values"
 
         self.assertFalse(schema_type_conversion._upstream_handles_incompatible_values(old_alter))
@@ -202,8 +204,8 @@ class TestUniqueInsertTransactionCompatibility(unittest.TestCase):
             return self.insert()
 
         def isolated_insert(self):
-            frappe.db.savepoint("insert")  # noqa: F821
-            frappe.db.rollback(save_point="insert")  # noqa: F821
+            frappe.db.savepoint("insert")
+            frappe.db.rollback(save_point="insert")
 
         self.assertFalse(unique_insert_transaction._upstream_isolates_insert_failures(old_insert))
         self.assertTrue(unique_insert_transaction._upstream_isolates_insert_failures(isolated_insert))
@@ -514,9 +516,9 @@ class TestBatchValuationLockCompatibility(unittest.TestCase):
             return child.type_of_transaction.isin(["Inward", "Outward"])  # noqa: F821
 
         def fixed_method(self):
-            if frappe.db.db_type == "postgres":  # noqa: F821
+            if frappe.db.db_type == "postgres":
                 child_query.select(child.name).where(conditions).for_update().run()  # noqa: F821
-            if frappe.db.db_type != "postgres":  # noqa: F821
+            if frappe.db.db_type != "postgres":
                 return grouped.for_update()  # noqa: F821
 
         self.assertTrue(batch_valuation_lock._legacy_shape_supported(old_method))
@@ -763,7 +765,7 @@ class TestStockAgeingPostgresCursorCompatibility(unittest.TestCase):
 
             def generate(self):
                 stock_ledger_entries = self._get_stock_ledger_entries()
-                with frappe.db.unbuffered_cursor():  # noqa: F821
+                with frappe.db.unbuffered_cursor():
                     return list(stock_ledger_entries)
 
             def _get_bundle_wise_details(self, stock_ledger_entries):
@@ -857,7 +859,7 @@ class TestOpeningInvoiceSavepointCompatibility(unittest.TestCase):
             try:
                 return invoices
             except Exception:
-                frappe.db.rollback()  # noqa: F821
+                frappe.db.rollback()
                 doc.log_error("Opening invoice creation failed")  # noqa: F821
 
         module = types.SimpleNamespace(start_import=old_start_import)
@@ -882,9 +884,7 @@ class TestAccountsReceivableGLBalanceCompatibility(unittest.TestCase):
 
         def old(report_date, company, account_type):
             balance_calc_fields = ["party", "SUM(debit - credit) AS balance"]
-            return frappe.db.get_all(  # noqa: F821
-                "GL Entry", fields=balance_calc_fields, group_by="party", as_list=1
-            )
+            return frappe.db.get_all("GL Entry", fields=balance_calc_fields, group_by="party", as_list=1)
 
         module = types.SimpleNamespace(get_gl_balance=old)
         with patch.object(accounts_receivable_gl_balance, "_load", return_value=module):
@@ -909,7 +909,7 @@ class TestPeriodClosingPostgresCursorCompatibility(unittest.TestCase):
 
         class PeriodClosingVoucher:
             def get_account_balances_based_on_dimensions(self, report_type):
-                with frappe.db.unbuffered_cursor():  # noqa: F821
+                with frappe.db.unbuffered_cursor():
                     return self.get_gl_entries_for_current_period(report_type, as_iterator=True)
 
             def get_accounting_dimension_fields(self):
@@ -957,7 +957,7 @@ class TestPostgresAutomaticIndexDropCompatibility(unittest.TestCase):
         queries = []
 
         def old_alter(self):
-            return frappe.db.sql('DROP INDEX IF EXISTS "middle_name" ;')  # noqa: F821
+            return frappe.db.sql('DROP INDEX IF EXISTS "middle_name" ;')
 
         table_class = type("FakePostgresTable", (), {"alter": old_alter})
 
@@ -967,11 +967,10 @@ class TestPostgresAutomaticIndexDropCompatibility(unittest.TestCase):
                 return "ok"
 
         fake_db = FakeDB()
-        fake_frappe = types.SimpleNamespace(db=fake_db)
         with (
             patch.object(patch_module, "_load_postgres_table", return_value=table_class),
             patch.object(patch_module, "_needs_patch", return_value=True),
-            patch.dict(sys.modules, {"frappe": fake_frappe}),
+            patch.object(frappe, "db", fake_db),
         ):
             self.assertTrue(patch_module.apply())
             table = table_class()
