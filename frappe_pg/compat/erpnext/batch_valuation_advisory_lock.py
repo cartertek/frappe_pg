@@ -31,7 +31,9 @@ def is_needed():
         source = inspect.getsource(method)
     except (OSError, TypeError):
         return False
-    return "calculate_avg_rate_from_deprecarated_ledgers" in source and "transaction_advisory_lock" not in source
+    return (
+        "calculate_avg_rate_from_deprecarated_ledgers" in source and "transaction_advisory_lock" not in source
+    )
 
 
 def apply():

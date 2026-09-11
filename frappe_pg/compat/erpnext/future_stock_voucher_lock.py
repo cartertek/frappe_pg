@@ -40,12 +40,7 @@ def _legacy_shape_supported(method):
         and "voucher_type" in source
         and "voucher_no" in source
         and "for update" in source.lower()
-        or (
-            "get_future_stock_vouchers" in source
-            and ".distinct()" in source
-            and ".for_update()" in source
-        )
-    )
+    ) or ("get_future_stock_vouchers" in source and ".distinct()" in source and ".for_update()" in source)
 
 
 def is_applied():
@@ -125,7 +120,12 @@ def apply():
     global _original, _patched
     module = _load_module()
     method = getattr(module, "get_future_stock_vouchers", None) if module else None
-    if method is None or is_applied() or _upstream_is_compatible(method) or not _legacy_shape_supported(method):
+    if (
+        method is None
+        or is_applied()
+        or _upstream_is_compatible(method)
+        or not _legacy_shape_supported(method)
+    ):
         return False
 
     _original = method

@@ -8,7 +8,6 @@ UPSTREAM_COMMIT = "develop"
 _patched = None
 
 
-
 def _load_module():
     try:
         return import_module("erpnext.accounts.doctype.period_closing_voucher.period_closing_voucher")
@@ -40,9 +39,10 @@ def apply():
     if not is_needed():
         return is_applied()
 
+    from erpnext.accounts import utils as accounts_utils
     from frappe import db
     from frappe.utils import add_days
-    from erpnext.accounts import utils as accounts_utils
+
     pcv = _load_module()
 
     def patched(self):
@@ -78,8 +78,8 @@ def apply():
         if not gle_exists_in_previous_year:
             return
 
-        from frappe import _
-        from frappe import throw
+        from frappe import _, throw
+
         throw(_("Previous Year is not closed, please close it first"))
 
     _patched = patched
