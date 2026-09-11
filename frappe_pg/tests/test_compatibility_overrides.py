@@ -1178,6 +1178,14 @@ class TestTotalStockSummaryGroupingCompatibility(unittest.TestCase):
             self.assertIs(module.get_total_stock, legacy)
 
 
+class TestProcessLossRegistryCoverage(unittest.TestCase):
+    def test_process_loss_grouping_is_registered(self):
+        from frappe_pg.compat import registry
+        from frappe_pg.compat.erpnext import process_loss_grouping
+
+        self.assertIn(process_loss_grouping, registry._COMPATIBILITY_OVERRIDES)
+
+
 class TestProcessLossGroupingCompatibility(unittest.TestCase):
     def tearDown(self):
         from frappe_pg.compat.erpnext import process_loss_grouping

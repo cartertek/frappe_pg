@@ -60,6 +60,7 @@ _COMPATIBILITY_OVERRIDES = (
     stock_balance_postgres_cursor,
     stock_reservation_grouping,
     pick_list_lock,
+    process_loss_grouping,
     product_bundle_balance_grouping,
     stock_reservation_lock,
     stock_reserved_qty,
