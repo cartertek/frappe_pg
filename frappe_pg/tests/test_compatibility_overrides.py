@@ -1283,3 +1283,44 @@ class TestProcessLossGroupingCompatibility(unittest.TestCase):
             self.assertFalse(process_loss_grouping.apply())
             self.assertTrue(process_loss_grouping.remove())
             self.assertIs(module.get_data, old)
+
+
+class TestAvailableSerialNoEmptySerialsCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import available_serial_no_empty_serials
+
+        available_serial_no_empty_serials._original = None
+        available_serial_no_empty_serials._patched = None
+
+    def test_detects_legacy_null_unsafe_shape_and_restores(self):
+        from frappe_pg.compat.erpnext import available_serial_no_empty_serials
+
+        def old(available_serial_nos, sle):
+            serial_nos = available_serial_nos.get(sle.serial_and_batch_bundle)
+            sle.balance_serial_no = "\n".join(serial_nos)
+
+        module = types.SimpleNamespace(update_available_serial_nos=old)
+        with patch.object(available_serial_no_empty_serials, "_load", return_value=module):
+            self.assertTrue(available_serial_no_empty_serials.is_needed())
+            self.assertTrue(available_serial_no_empty_serials.apply())
+            self.assertIs(module.update_available_serial_nos, available_serial_no_empty_serials._compatible)
+            self.assertTrue(available_serial_no_empty_serials.remove())
+            self.assertIs(module.update_available_serial_nos, old)
+
+    def test_empty_serial_list_is_rendered_as_empty_string(self):
+        from frappe_pg.compat.erpnext import available_serial_no_empty_serials
+
+        module = types.SimpleNamespace(get_serial_nos=lambda value: value.split("\n") if value else [])
+        sle = types.SimpleNamespace(
+            serial_no=None, serial_and_batch_bundle=None, item_code="ITEM", warehouse="WH"
+        )
+        with patch.object(available_serial_no_empty_serials, "_load", return_value=module):
+            available_serial_no_empty_serials._compatible({}, sle)
+        self.assertEqual(sle.serial_no, "")
+        self.assertEqual(sle.balance_serial_no, "")
+
+    def test_registered(self):
+        from frappe_pg.compat import registry
+        from frappe_pg.compat.erpnext import available_serial_no_empty_serials
+
+        self.assertIn(available_serial_no_empty_serials, registry._COMPATIBILITY_OVERRIDES)
