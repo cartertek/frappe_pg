@@ -1,10 +1,12 @@
 """ERPNext batch-valuation row-lock compatibility for PostgreSQL.
 
 Older ERPNext releases place ``FOR UPDATE`` on a grouped Serial and Batch Entry
-query. PostgreSQL rejects row locks on grouped queries. ERPNext develop fixes
-this by locking the matching detail rows in a separate plain SELECT before
-running the grouped aggregate. This adapter backports that behavior without
-modifying ERPNext source.
+query. PostgreSQL rejects row locks on grouped queries. Current ERPNext develop
+serializes PostgreSQL batch valuation with a transaction advisory lock in
+``calculate_avg_rate`` and leaves this grouped history read unlocked there,
+while MariaDB keeps its original ``FOR UPDATE`` behavior. This adapter backports
+that query behavior; ``batch_valuation_advisory_lock`` supplies the companion
+PostgreSQL advisory lock.
 """
 
 import inspect
@@ -30,9 +32,10 @@ def _upstream_is_compatible(method):
     except (OSError, TypeError):
         return False
     return (
-        'if frappe.db.db_type == "postgres"' in source
-        and ".select(child.name).where(conditions).for_update().run()" in source
-        and 'if frappe.db.db_type != "postgres"' in source
+        'if frappe.db.db_type != "postgres"' in source
+        and "query = query.for_update()" in source
+        and ".where(conditions)" in source
+        and ".groupby(child.batch_no)" in source
     )
 
 
@@ -134,11 +137,7 @@ def _compatible_get_batch_stock_before_date(self):
     if self.stock_closing_from_datetime:
         conditions &= child.posting_datetime >= self.stock_closing_from_datetime
 
-    # Preserve the original locking semantics: lock the matching detail rows,
-    # then aggregate those same rows without a lock clause on the GROUP BY.
-    frappe.qb.from_(child).select(child.name).where(conditions).for_update().run()
-
-    return (
+    query = (
         frappe.qb.from_(child)
         .select(
             child.batch_no,
@@ -147,8 +146,11 @@ def _compatible_get_batch_stock_before_date(self):
         )
         .where(conditions)
         .groupby(child.batch_no)
-        .run(as_dict=True)
     )
+    if frappe.db.db_type != "postgres":
+        query = query.for_update()
+
+    return query.run(as_dict=True)
 
 
 def apply():
