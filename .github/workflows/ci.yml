@@ -575,6 +575,19 @@ jobs:
               if marker not in source:
                   raise SystemExit("ERPNext v15 tax-withholding setup marker not found")
               tax_test.write_text(source.replace(marker, replacement, 1))
+
+          # ERPNext develop made Purchase Invoice GL checks independent of DB
+          # collation. MariaDB/Postgres order account names with leading
+          # underscores differently, so match actual rows against the expected
+          # multiset instead of relying on positional ORDER BY account.
+          purchase_invoice_test = Path("apps/erpnext/erpnext/accounts/doctype/purchase_invoice/test_purchase_invoice.py")
+          source = purchase_invoice_test.read_text()
+          old = """\tgl_entries = query.run(as_dict=True)\n\n\tfor i, gle in enumerate(gl_entries):\n\t\tdoc.assertEqual(expected_gle[i][0], gle.account)\n\t\tdoc.assertEqual(expected_gle[i][1], gle.debit)\n\t\tdoc.assertEqual(expected_gle[i][2], gle.credit)\n\t\tdoc.assertEqual(getdate(expected_gle[i][3]), gle.posting_date)\n\n\t\tif additional_columns:\n\t\t\tj = 4\n\t\t\tfor col in additional_columns:\n\t\t\t\tdoc.assertEqual(expected_gle[i][j], gle[col])\n\t\t\t\tj += 1\n"""
+          new = """\tgl_entries = query.run(as_dict=True)\n\n\t# MariaDB and Postgres collate `account` differently, so DB row order isn't portable.\n\tcols = additional_columns or []\n\n\tdef _key(account, debit, credit, posting_date, extras):\n\t\treturn (account, flt(debit), flt(credit), getdate(posting_date), *(str(v) for v in extras))\n\n\tremaining = {}\n\tfor e in expected_gle:\n\t\tk = _key(e[0], e[1], e[2], e[3], e[4 : 4 + len(cols)])\n\t\tremaining[k] = remaining.get(k, 0) + 1\n\n\tfor gle in gl_entries:\n\t\tk = _key(gle.account, gle.debit, gle.credit, gle.posting_date, [gle[c] for c in cols])\n\t\tdoc.assertGreater(remaining.get(k, 0), 0, msg=f"Unexpected GL entry {k}; expected one of {list(remaining)}")\n\t\tremaining[k] -= 1\n"""
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("ERPNext v15 Purchase Invoice GL helper marker not found")
+              purchase_invoice_test.write_text(source.replace(old, new, 1))
           PYFIX
 
       - name: Expose v15 Period Closing Voucher test failures
