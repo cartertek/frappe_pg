@@ -2370,6 +2370,41 @@ def normalize_erpnext_batchwise_qty_result_shape(query):
     )
 
 
+def normalize_erpnext_purchase_return_result_shape(query):
+    """Keep legacy Purchase Receipt returned-quantity rows two columns wide.
+
+    ERPNext v15 converts ``(purchase_receipt_item, qty)`` rows directly into
+    ``frappe._dict``. Frappe's PostgreSQL grouped-order helper can append an
+    aggregate ordering column, which changes each row to three cells. Rebuild
+    only this exact grouped projection and remove the unobservable ordering.
+    """
+    required = (
+        r'\bFROM\s+"tabPurchase Receipt"',
+        r'\bJOIN\s+"tabPurchase Receipt Item"',
+        r'\bSUM\s*\(\s*ABS\s*\(\s*"tabPurchase Receipt Item"\."qty"\s*\)\s*\)',
+        r'\bGROUP\s+BY\s+"tabPurchase Receipt Item"\."purchase_receipt_item"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+
+    select_match = re.search(r'\bSELECT\b.+?\bFROM\b', query, re.IGNORECASE | re.DOTALL)
+    if not select_match:
+        return query
+    rebuilt = (
+        query[: select_match.start()]
+        + 'SELECT "tabPurchase Receipt Item"."purchase_receipt_item",'
+        + 'SUM(ABS("tabPurchase Receipt Item"."qty")) AS "qty" FROM'
+        + query[select_match.end() :]
+    )
+    return re.sub(
+        r'\s+ORDER\s+BY\s+.+?(?=(?:\s+LIMIT\s+\d+)?\s*$)',
+        '',
+        rebuilt,
+        count=1,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+
 def normalize_erpnext_party_specific_item_based_on(query):
     """Use the active Party Specific Item field name on legacy ERPNext v15 queries."""
     if not re.search(r'\b(?:FROM|UPDATE)\s+"tabParty Specific Item"', query, re.IGNORECASE):
@@ -2384,7 +2419,7 @@ def normalize_erpnext_party_specific_item_based_on(query):
 
 def normalize_erpnext_bom_stock_reports(query):
     """Backport PostgreSQL grouping semantics for legacy BOM stock reports."""
-    if not re.search(r'\bFROM\s+"tabBOM Item"', query, re.IGNORECASE):
+    if not re.search(r'\b(?:FROM|JOIN)\s+"tabBOM Item"', query, re.IGNORECASE):
         return query
     if not re.search(r'\bGROUP\s+BY\s+"tabBOM Item"\."item_code"', query, re.IGNORECASE):
         return query
@@ -2403,6 +2438,19 @@ def normalize_erpnext_bom_stock_reports(query):
             lambda m, field=field, aggregate=aggregate: f'{aggregate}("tabBOM Item"."{field}")',
             query,
             count=1,
+            flags=re.IGNORECASE,
+        )
+    if re.search(r'\bJOIN\s+"tabBOM"', query, re.IGNORECASE):
+        query = re.sub(
+            r'(?<![A-Za-z0-9_.])"tabBOM"\."quantity"',
+            'MAX("tabBOM"."quantity")',
+            query,
+            flags=re.IGNORECASE,
+        )
+        query = re.sub(
+            r'(?<![A-Za-z0-9_.])"sq0"\."actual_qty"',
+            'MAX("sq0"."actual_qty")',
+            query,
             flags=re.IGNORECASE,
         )
     return query

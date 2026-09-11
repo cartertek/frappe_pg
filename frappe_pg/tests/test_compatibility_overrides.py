@@ -820,6 +820,64 @@ class TestStockAgeingPostgresCursorCompatibility(unittest.TestCase):
             self.assertTrue(stock_ageing_postgres_cursor.remove())
             self.assertIs(FIFOSlots.generate, original)
 
+    def test_postgres_explicit_sle_avoids_unbuffered_cursor(self):
+        from frappe_pg.compat.erpnext import stock_ageing_postgres_cursor
+
+        events = []
+
+        class FIFOSlots:
+            def __init__(self):
+                self.sle = [{"name": "A"}, {"name": "B"}]
+                self.filters = {"show_warehouse_wise_stock": True}
+                self.item_details = {"ok": True}
+
+            def generate(self):
+                stock_ledger_entries = self.sle
+                with frappe.db.unbuffered_cursor():
+                    for row in stock_ledger_entries:
+                        self._process_stock_ledger_entry(row, {}, {})
+                return self.item_details
+
+            def _get_bundle_wise_details(self, rows):
+                events.append(("bundles", len(rows)))
+                return {}, {}
+
+            def prepare_stock_reco_voucher_wise_count(self):
+                events.append("prepare")
+
+            def _prefetch_batchwise_valuations(self):
+                raise AssertionError("explicit rows must not prefetch")
+
+            def _prefetch_valuation_methods(self):
+                raise AssertionError("explicit rows must not prefetch")
+
+            def _get_stock_ledger_entries(self):
+                raise AssertionError("explicit rows must not be replaced")
+
+            def _process_stock_ledger_entry(self, row, serials, batches):
+                events.append(f"process-{row['name']}")
+
+            def _recompute_moving_average_slots(self):
+                events.append("recompute")
+
+            def _rebalance_batch_slots(self):
+                events.append("rebalance")
+
+            def _aggregate_details_by_item(self, details):
+                return details
+
+        module = types.SimpleNamespace(FIFOSlots=FIFOSlots, get_float_precision=lambda: 6)
+        fake_frappe = types.SimpleNamespace(db=types.SimpleNamespace(db_type="postgres"))
+        with (
+            patch.object(stock_ageing_postgres_cursor, "_load", return_value=module),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
+        ):
+            self.assertTrue(stock_ageing_postgres_cursor.apply())
+            result = FIFOSlots().generate()
+            self.assertEqual(result, {"ok": True})
+            self.assertEqual(events[:3], [("bundles", 2), "prepare", "process-A"])
+            self.assertIn("process-B", events)
+
 
 class TestProductBundleBalanceGroupingCompatibility(unittest.TestCase):
     def tearDown(self):
@@ -845,6 +903,14 @@ class TestProductBundleBalanceGroupingCompatibility(unittest.TestCase):
             self.assertFalse(product_bundle_balance_grouping.apply())
             self.assertTrue(product_bundle_balance_grouping.remove())
             self.assertIs(module.get_item_wise_max_posting_datetime, old)
+
+
+class TestOpeningInvoiceSavepointRegistryCoverage(unittest.TestCase):
+    def test_opening_invoice_savepoint_is_registered(self):
+        from frappe_pg.compat import registry
+        from frappe_pg.compat.erpnext import opening_invoice_savepoint
+
+        self.assertIn(opening_invoice_savepoint, registry._COMPATIBILITY_OVERRIDES)
 
 
 class TestOpeningInvoiceSavepointCompatibility(unittest.TestCase):
@@ -1176,3 +1242,42 @@ class TestTotalStockSummaryGroupingCompatibility(unittest.TestCase):
             self.assertIs(module.get_total_stock, total_stock_summary_grouping._compatible)
             self.assertTrue(total_stock_summary_grouping.remove())
             self.assertIs(module.get_total_stock, legacy)
+
+
+class TestProcessLossRegistryCoverage(unittest.TestCase):
+    def test_process_loss_grouping_is_registered(self):
+        from frappe_pg.compat import registry
+        from frappe_pg.compat.erpnext import process_loss_grouping
+
+        self.assertIn(process_loss_grouping, registry._COMPATIBILITY_OVERRIDES)
+
+
+class TestProcessLossGroupingCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import process_loss_grouping
+
+        process_loss_grouping._original = None
+        process_loss_grouping._patched = None
+
+    def test_detects_legacy_grouped_work_order_query_and_restores(self):
+        from frappe_pg.compat.erpnext import process_loss_grouping
+
+        def old(filters):
+            query = (
+                frappe.qb.from_(wo)  # noqa: F821
+                .select(
+                    wo.name,  # noqa: F821
+                    Sum(se.total_incoming_value),  # noqa: F821
+                )
+                .groupby(se.work_order)  # noqa: F821
+            )
+            return query.run(as_dict=True)
+
+        module = types.SimpleNamespace(get_data=old)
+        with patch.object(process_loss_grouping, "_load", return_value=module):
+            self.assertTrue(process_loss_grouping.is_needed())
+            self.assertTrue(process_loss_grouping.apply())
+            self.assertIs(module.get_data, process_loss_grouping._compatible_get_data)
+            self.assertFalse(process_loss_grouping.apply())
+            self.assertTrue(process_loss_grouping.remove())
+            self.assertIs(module.get_data, old)

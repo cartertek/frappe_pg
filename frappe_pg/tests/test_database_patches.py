@@ -64,6 +64,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_party_specific_item_based_on,
     normalize_erpnext_production_plan_explosion_grouping,
     normalize_erpnext_production_plan_subitems_grouping,
+    normalize_erpnext_purchase_return_result_shape,
     normalize_erpnext_purchased_items_result_shape,
     normalize_erpnext_repost_item_fields_grouping,
     normalize_erpnext_repost_item_grouping,
@@ -260,6 +261,20 @@ class TestQueryTransformers(unittest.TestCase):
         self.assertIn('"based_on_value"=%s', transformed)
         self.assertNotIn('"based_on"=%s', transformed)
 
+    def test_purchase_return_grouped_result_shape_stays_two_columns(self):
+        query = (
+            'SELECT "tabPurchase Receipt Item"."purchase_receipt_item",'
+            'SUM(ABS("tabPurchase Receipt Item"."qty")) AS "qty",'
+            'MAX("tabPurchase Receipt"."modified") AS "tabPurchase Receipt.modified" '
+            'FROM "tabPurchase Receipt" JOIN "tabPurchase Receipt Item" ON 1=1 '
+            'GROUP BY "tabPurchase Receipt Item"."purchase_receipt_item" '
+            'ORDER BY "tabPurchase Receipt.modified" DESC'
+        )
+        transformed = normalize_erpnext_purchase_return_result_shape(query)
+        self.assertEqual(transformed.count(' AS "qty"'), 1)
+        self.assertNotIn('modified', transformed)
+        self.assertNotIn('ORDER BY', transformed.upper())
+
     def test_bom_stock_calculated_groups_scalar_fields(self):
         query = (
             'SELECT "tabBOM Item"."item_code","tabBOM Item"."description",'
@@ -269,6 +284,23 @@ class TestQueryTransformers(unittest.TestCase):
         transformed = normalize_erpnext_bom_stock_reports(query)
         self.assertIn('MAX("tabBOM Item"."description")', transformed)
         self.assertIn('SUM("tabBOM Item"."qty_consumed_per_unit")', transformed)
+
+    def test_bom_stock_report_joined_from_bom_aggregates_scalar_fields(self):
+        query = (
+            'SELECT "tabBOM Item"."item_code","tabBOM Item"."item_name","tabBOM Item"."description",'
+            'SUM("tabBOM Item"."stock_qty"),"tabBOM Item"."stock_uom",'
+            'SUM("tabBOM Item"."stock_qty")*1/"tabBOM"."quantity","sq0"."actual_qty" '
+            'FROM "tabBOM" JOIN "tabBOM Item" ON "tabBOM"."name"="tabBOM Item"."parent" '
+            'LEFT JOIN (SELECT "tabBin"."item_code",SUM("tabBin"."actual_qty") "actual_qty" FROM "tabBin" '
+            'GROUP BY "tabBin"."item_code") "sq0" ON "tabBOM Item"."item_code"="sq0"."item_code" '
+            'GROUP BY "tabBOM Item"."item_code"'
+        )
+        transformed = normalize_erpnext_bom_stock_reports(query)
+        self.assertIn('MAX("tabBOM Item"."item_name")', transformed)
+        self.assertIn('MAX("tabBOM Item"."description")', transformed)
+        self.assertIn('MAX("tabBOM Item"."stock_uom")', transformed)
+        self.assertIn('MAX("tabBOM"."quantity")', transformed)
+        self.assertIn('MAX("sq0"."actual_qty")', transformed)
 
     def test_bom_stock_report_groups_text_scalars(self):
         query = (
@@ -1627,6 +1659,15 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
         self.assertNotIn('MAX(posting_date, posting_time)', transformed)
         self.assertIn('MAX("posting_date") AS "posting_date"', transformed)
         self.assertIn('MAX("posting_time") AS "posting_time"', transformed)
+
+    def test_item_variant_attribute_numeric_parameter_is_stringified(self):
+        query = (
+            'SELECT t1.parent FROM "tabItem Variant Attribute" t1 WHERE attribute_value = %(attribute_value)s'
+        )
+        values = {"attribute_value": 1.1}
+        self.assertEqual(
+            database_patches._normalize_item_attribute_values(query, values)["attribute_value"], "1.1"
+        )
 
     def test_item_attribute_numeric_parameter_is_stringified(self):
         query = 'select v.abbr from "tabItem Attribute Value" v where v.attribute_value=%(attribute_value)s'
