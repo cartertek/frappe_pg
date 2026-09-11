@@ -1158,7 +1158,7 @@ class TestQueryTransformers(unittest.TestCase):
 
     def test_unaliased_quoted_mysql_update_join(self):
         query = """UPDATE "tabItem Variant Attribute" JOIN "tabItem" ON "tabItem"."name"="tabItem Variant Attribute"."parent" SET "attribute_value"=CASE WHEN "tabItem Variant Attribute"."attribute_value"='Large' THEN 'Larger' ELSE "tabItem Variant Attribute"."attribute_value" END WHERE "tabItem"."variant_of" IS NOT NULL AND "tabItem Variant Attribute"."attribute"='Test Size'"""
-        expected = """UPDATE "tabItem Variant Attribute" SET "attribute_value"=CASE WHEN "tabItem Variant Attribute"."attribute_value"='Large' THEN 'Larger' ELSE "tabItem Variant Attribute"."attribute_value" END FROM "tabItem" WHERE "tabItem"."name"="tabItem Variant Attribute"."parent" AND "tabItem"."variant_of" IS NOT NULL AND "tabItem Variant Attribute"."attribute"='Test Size'"""
+        expected = """UPDATE "tabItem Variant Attribute" SET "attribute_value"=CASE WHEN "attribute_value"='Large' THEN 'Larger' ELSE "attribute_value" END FROM "tabItem" WHERE "tabItem"."name"="tabItem Variant Attribute"."parent" AND "tabItem"."variant_of" IS NOT NULL AND "tabItem Variant Attribute"."attribute"='Test Size'"""
         self.assertEqual(convert_mysql_update_join(query), expected)
         self.assertEqual(convert_mysql_update_join(expected), expected)
 
