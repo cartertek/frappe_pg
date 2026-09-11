@@ -100,6 +100,62 @@ def skip_v15_stale_assertions(module):
     method.__unittest_skip_why__ = "v15 assertion still expects COALESCE after Frappe removed it from func_is"
 
 
+def patch_stale_model_utils_core_doctype_test(module):
+    """Backport develop's deterministic core-DocType permission assertions."""
+    if module.__name__ != "frappe.tests.test_model_utils":
+        return
+    test_class = getattr(module, "TestModelUtils", None)
+    if test_class is None:
+        return
+    method = getattr(test_class, "test_get_permitted_fields", None)
+    if method is None or getattr(method, "_frappe_pg_core_doctype_guard", False):
+        return
+    source = inspect.getsource(method)
+    if 'if doctype == "User"' in source and 'self.assertNotIn("email", get_permitted_fields("User"))' in source:
+        return
+    if "choice(core_doctypes_list)" not in source:
+        return
+
+    def compatible_test(self):
+        from frappe.model import core_doctypes_list, get_permitted_fields
+
+        todo_all_fields = get_permitted_fields("ToDo", user="Administrator")
+        todo_all_columns = frappe.get_meta("ToDo").get_valid_columns()
+        self.assertListEqual(todo_all_fields, todo_all_columns)
+
+        with module.set_user("Guest"):
+            guest_permitted_fields = get_permitted_fields("ToDo")
+            self.assertNotIn("description", guest_permitted_fields)
+
+        with module.set_user("Guest"):
+            for doctype in core_doctypes_list:
+                if doctype == "User":
+                    continue
+                with self.subTest(doctype=doctype):
+                    all_columns = frappe.get_meta(doctype).get_valid_columns()
+                    self.assertSequenceEqual(get_permitted_fields(doctype), all_columns)
+            self.assertNotIn("email", get_permitted_fields("User"))
+
+        with module.set_user("Administrator"):
+            without_parent_fields = get_permitted_fields("Installed Application")
+            with_parent_fields = get_permitted_fields(
+                "Installed Application", parenttype="Installed Applications"
+            )
+            child_all_fields = frappe.get_meta("Installed Application").get_valid_columns()
+            self.assertLess(len(without_parent_fields), len(with_parent_fields))
+            self.assertSequenceEqual(set(with_parent_fields), set(child_all_fields))
+
+        with module.set_user("Guest"):
+            self.assertNotIn("app_name", get_permitted_fields("Installed Application"))
+            self.assertNotIn(
+                "app_name",
+                get_permitted_fields("Installed Application", parenttype="Installed Applications"),
+            )
+
+    compatible_test._frappe_pg_core_doctype_guard = True
+    test_class.test_get_permitted_fields = compatible_test
+
+
 def patch_v15_command_test(module):
     """Backport the v16 guard against same-second backup filename collisions."""
     if module.__name__ != "frappe.tests.test_commands":
@@ -226,6 +282,7 @@ class SelectedTestRunner(ParallelTestRunner):
             path, filename = file_info
             module = self.get_module(path, filename)
             skip_v15_stale_assertions(module)
+            patch_stale_model_utils_core_doctype_test(module)
             patch_v15_command_test(module)
             patch_v15_fixture_import_test(module)
         return super().run_tests_for_file(file_info)
