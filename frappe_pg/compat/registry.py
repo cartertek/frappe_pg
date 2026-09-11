@@ -6,6 +6,7 @@ from frappe_pg.compat.erpnext import (
     bom_stock_analysis_grouping,
     future_stock_voucher_lock,
     manufacturing_grouping,
+    opening_invoice_savepoint,
     payment_ledger_grouping,
     payment_terms_status,
     period_closing_fiscal_year,
