@@ -942,3 +942,47 @@ class TestPeriodClosingPostgresCursorCompatibility(unittest.TestCase):
             self.assertIn(("Profit and Loss", False, False), events)
             self.assertTrue(period_closing_postgres_cursor.remove())
             self.assertIs(PeriodClosingVoucher.get_account_balances_based_on_dimensions, original)
+
+
+class TestPostgresAutomaticIndexDropCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.frappe import postgres_automatic_index_drop
+
+        postgres_automatic_index_drop._original_alter = None
+        postgres_automatic_index_drop._patched_alter = None
+
+    def test_drop_index_sql_is_namespaced_after_alter_state_is_built(self):
+        from frappe_pg.compat.frappe import postgres_automatic_index_drop as patch_module
+
+        queries = []
+
+        def old_alter(self):
+            return frappe.db.sql('DROP INDEX IF EXISTS "middle_name" ;')  # noqa: F821
+
+        table_class = type("FakePostgresTable", (), {"alter": old_alter})
+
+        class FakeDB:
+            def sql(self, query, *args, **kwargs):
+                queries.append(query)
+                return "ok"
+
+        fake_db = FakeDB()
+        fake_frappe = types.SimpleNamespace(db=fake_db)
+        with (
+            patch.object(patch_module, "_load_postgres_table", return_value=table_class),
+            patch.object(patch_module, "_needs_patch", return_value=True),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
+        ):
+            self.assertTrue(patch_module.apply())
+            table = table_class()
+            table.table_name = "tabUser"
+            self.assertEqual(table.alter(), "ok")
+            self.assertEqual(queries, ['DROP INDEX IF EXISTS "tabUser_middle_name_index" ;'])
+            self.assertNotIn("sql", fake_db.__dict__)
+            self.assertTrue(patch_module.remove())
+
+    def test_explicit_and_already_namespaced_indexes_are_unchanged(self):
+        from frappe_pg.compat.frappe import postgres_automatic_index_drop as patch_module
+
+        query = 'DROP INDEX IF EXISTS "unique_email" ; DROP INDEX IF EXISTS "tabUser_middle_name_index" ;'
+        self.assertEqual(patch_module._rewrite_automatic_drop(query, "tabUser"), query)
