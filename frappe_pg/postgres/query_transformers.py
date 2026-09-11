@@ -1627,7 +1627,17 @@ def convert_mysql_timestamp_pair(query):
         rf"\bTIMESTAMP\s*\(\s*(?P<date>{atom})\s*,\s*(?P<time>{atom})\s*\)",
         re.IGNORECASE,
     )
-    return pattern.sub(lambda match: f'({match.group("date")} + {match.group("time")})', query)
+
+    def replacement(match):
+        date_expr = match.group("date")
+        time_expr = match.group("time")
+        if date_expr.startswith("%"):
+            date_expr = f"CAST({date_expr} AS date)"
+        if time_expr.startswith("%"):
+            time_expr = f"CAST({time_expr} AS time)"
+        return f"({date_expr} + {time_expr})"
+
+    return pattern.sub(replacement, query)
 
 
 def normalize_erpnext_work_order_return_grouping(query):
