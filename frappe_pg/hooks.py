@@ -88,6 +88,7 @@ required_apps = ["frappe"]
 # These hooks ensure PostgreSQL patches are applied at the right time
 
 after_install = "frappe_pg.postgres.database_patches.apply_postgres_fixes"
+after_app_install = "frappe_pg.compat.lifecycle.after_app_install"
 after_migrate = "frappe_pg.postgres.database_patches.after_migrate"
 on_session_creation = "frappe_pg.postgres.database_patches.on_session_creation"
 
@@ -253,4 +254,3 @@ on_session_creation = "frappe_pg.postgres.database_patches.on_session_creation"
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
-
