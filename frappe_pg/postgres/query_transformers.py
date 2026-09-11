@@ -2440,7 +2440,7 @@ def normalize_erpnext_bom_stock_reports(query):
             count=1,
             flags=re.IGNORECASE,
         )
-    if re.search(r'\bJOIN\s+"tabBOM"', query, re.IGNORECASE):
+    if re.search(r'\b(?:FROM|JOIN)\s+"tabBOM"', query, re.IGNORECASE):
         query = re.sub(
             r'(?<![A-Za-z0-9_.])"tabBOM"\."quantity"',
             'MAX("tabBOM"."quantity")',
