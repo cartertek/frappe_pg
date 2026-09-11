@@ -14,6 +14,13 @@ _original_db_insert = None
 _patched_db_insert = None
 
 
+_DATABASE_UNIQUE_DOCTYPES = {
+    # ERPNext creates this composite constraint in Bin.on_doctype_update(); it is
+    # not represented by any individual DocField.unique flag.
+    "Bin",
+}
+
+
 def _load_base_document():
     try:
         from frappe.model.base_document import BaseDocument
@@ -47,8 +54,13 @@ def is_needed():
     )
 
 
-def _document_has_unique_fields(doc):
-    return any(getattr(field, "unique", False) for field in doc.meta.fields)
+def _document_needs_savepoint(doc):
+    """Return whether an insert can hit an expected uniqueness retry path."""
+    return (
+        getattr(doc, "doctype", None) in _DATABASE_UNIQUE_DOCTYPES
+        or getattr(getattr(doc, "meta", None), "autoname", None) == "hash"
+        or any(getattr(field, "unique", False) for field in getattr(getattr(doc, "meta", None), "fields", ()))
+    )
 
 
 def apply():
@@ -64,19 +76,51 @@ def apply():
     def compatible_db_insert(self, *args, **kwargs):
         import frappe
 
-        if getattr(frappe.db, "db_type", None) != "postgres" or not _document_has_unique_fields(self):
+        if getattr(frappe.db, "db_type", None) != "postgres" or not _document_needs_savepoint(self):
             return _original_db_insert(self, *args, **kwargs)
+
+        # Frappe retries ``autoname == "hash"`` primary-key collisions from
+        # inside db_insert() by clearing ``name`` and recursively calling
+        # ``self.db_insert()``. PostgreSQL has already marked the transaction
+        # failed at that point, so the recursive wrapper must restore the
+        # active savepoint before Frappe can generate and insert the new hash.
+        retry_save_point = getattr(self, "_frappe_pg_insert_savepoint", None)
+        if retry_save_point:
+            frappe.db.rollback(save_point=retry_save_point)
 
         save_point = f"frappe_pg_unique_{uuid.uuid4().hex}"
         frappe.db.savepoint(save_point)
+        previous_save_point = retry_save_point
+        self._frappe_pg_insert_savepoint = save_point
         try:
             result = _original_db_insert(self, *args, **kwargs)
-        except Exception:
+        except Exception as exc:
             frappe.db.rollback(save_point=save_point)
+
+            # A field-based autoname can also be marked unique. PostgreSQL may
+            # report that redundant unique index before the primary-key index,
+            # causing Frappe to raise UniqueValidationError even though the
+            # semantic collision is the document name itself. Preserve Frappe's
+            # DuplicateEntryError contract for that narrow redundant-constraint
+            # shape while leaving ordinary unique-field violations untouched.
+            autoname = getattr(getattr(self, "meta", None), "autoname", "") or ""
+            if autoname.startswith("field:") and isinstance(exc, frappe.UniqueValidationError):
+                fieldname = autoname.split(":", 1)[1]
+                field = getattr(getattr(self, "meta", None), "get_field", lambda _name: None)(fieldname)
+                if field and getattr(field, "unique", False) and self.name == self.get(fieldname):
+                    raise frappe.DuplicateEntryError(self.doctype, self.name, exc) from exc
             raise
         else:
             frappe.db.release_savepoint(save_point)
             return result
+        finally:
+            if previous_save_point:
+                self._frappe_pg_insert_savepoint = previous_save_point
+            else:
+                try:
+                    delattr(self, "_frappe_pg_insert_savepoint")
+                except AttributeError:
+                    pass
 
     _patched_db_insert = compatible_db_insert
     document.db_insert = compatible_db_insert  # nosemgrep

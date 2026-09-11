@@ -221,7 +221,7 @@ class TestUniqueInsertTransactionCompatibility(unittest.TestCase):
 
         document = types.SimpleNamespace(db_insert=old_insert)
         field = types.SimpleNamespace(unique=True)
-        doc = types.SimpleNamespace(meta=types.SimpleNamespace(fields=[field]))
+        doc = types.SimpleNamespace(meta=types.SimpleNamespace(fields=[field], autoname=None))
         fake_db = Mock(db_type="postgres")
         fake_frappe = types.ModuleType("frappe")
         fake_frappe.db = fake_db
@@ -240,6 +240,117 @@ class TestUniqueInsertTransactionCompatibility(unittest.TestCase):
             self.assertTrue(unique_insert_transaction.remove())
             self.assertIs(document.db_insert, old_insert)
 
+    def test_field_autoname_unique_collision_maps_to_duplicate_entry(self):
+        from frappe_pg.compat.frappe import unique_insert_transaction
+
+        class UniqueValidationError(Exception):
+            pass
+
+        class DuplicateEntryError(Exception):
+            pass
+
+        def old_insert(self, *args, **kwargs):
+            raise UniqueValidationError("duplicate event")
+
+        document = types.SimpleNamespace(db_insert=old_insert)
+        event_field = types.SimpleNamespace(unique=True)
+        meta = types.SimpleNamespace(
+            autoname="field:event",
+            fields=[event_field],
+            get_field=lambda name: event_field if name == "event" else None,
+        )
+        doc = types.SimpleNamespace(
+            doctype="HR Telemetry Milestone",
+            name="_test_claim",
+            meta=meta,
+            get=lambda name: "_test_claim" if name == "event" else None,
+        )
+        fake_db = Mock(db_type="postgres")
+        fake_frappe = types.ModuleType("frappe")
+        fake_frappe.db = fake_db
+        fake_frappe.UniqueValidationError = UniqueValidationError
+        fake_frappe.DuplicateEntryError = DuplicateEntryError
+
+        with (
+            patch.object(unique_insert_transaction, "_load_base_document", return_value=document),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
+        ):
+            self.assertTrue(unique_insert_transaction.apply())
+            with self.assertRaises(DuplicateEntryError):
+                document.db_insert(doc)
+
+        fake_db.rollback.assert_called_once()
+
+    def test_non_autoname_unique_collision_keeps_unique_validation_error(self):
+        from frappe_pg.compat.frappe import unique_insert_transaction
+
+        class UniqueValidationError(Exception):
+            pass
+
+        class DuplicateEntryError(Exception):
+            pass
+
+        def old_insert(self, *args, **kwargs):
+            raise UniqueValidationError("duplicate ordinary field")
+
+        document = types.SimpleNamespace(db_insert=old_insert)
+        field = types.SimpleNamespace(unique=True)
+        doc = types.SimpleNamespace(
+            doctype="Example",
+            name="EX-1",
+            meta=types.SimpleNamespace(autoname=None, fields=[field]),
+        )
+        fake_db = Mock(db_type="postgres")
+        fake_frappe = types.ModuleType("frappe")
+        fake_frappe.db = fake_db
+        fake_frappe.UniqueValidationError = UniqueValidationError
+        fake_frappe.DuplicateEntryError = DuplicateEntryError
+
+        with (
+            patch.object(unique_insert_transaction, "_load_base_document", return_value=document),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
+        ):
+            self.assertTrue(unique_insert_transaction.apply())
+            with self.assertRaises(UniqueValidationError):
+                document.db_insert(doc)
+
+    def test_hash_autoname_retry_rolls_back_before_recursive_insert(self):
+        from frappe_pg.compat.frappe import unique_insert_transaction
+
+        attempts = []
+
+        def old_insert(self, *args, **kwargs):
+            attempts.append(self.name)
+            if len(attempts) == 1:
+                # Mirror Frappe's hash-collision branch: the database statement
+                # failed, Frappe clears the name and recursively retries.
+                self.name = None
+                self.db_insert()
+            return "ok"
+
+        document = types.SimpleNamespace(db_insert=old_insert)
+        fake_db = Mock(db_type="postgres")
+        fake_frappe = types.ModuleType("frappe")
+        fake_frappe.db = fake_db
+        doc = types.SimpleNamespace(
+            name="collision",
+            meta=types.SimpleNamespace(autoname="hash", fields=[]),
+        )
+
+        with (
+            patch.object(unique_insert_transaction, "_load_base_document", return_value=document),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
+        ):
+            self.assertTrue(unique_insert_transaction.apply())
+            doc.db_insert = lambda *args, **kwargs: document.db_insert(doc, *args, **kwargs)
+            self.assertEqual(document.db_insert(doc), "ok")
+
+        self.assertEqual(len(attempts), 2)
+        # The recursive retry restores the outer savepoint before creating its own.
+        fake_db.rollback.assert_called_once()
+        self.assertEqual(fake_db.savepoint.call_count, 2)
+        self.assertEqual(fake_db.release_savepoint.call_count, 2)
+
     def test_ordinary_or_non_postgres_insert_has_no_savepoint(self):
         from frappe_pg.compat.frappe import unique_insert_transaction
 
@@ -250,7 +361,7 @@ class TestUniqueInsertTransactionCompatibility(unittest.TestCase):
             with self.subTest(db_type=db_type, unique=unique):
                 document = types.SimpleNamespace(db_insert=old_insert)
                 doc = types.SimpleNamespace(
-                    meta=types.SimpleNamespace(fields=[types.SimpleNamespace(unique=unique)])
+                    meta=types.SimpleNamespace(fields=[types.SimpleNamespace(unique=unique)], autoname=None)
                 )
                 fake_db = Mock(db_type=db_type)
                 fake_frappe = types.ModuleType("frappe")
@@ -630,3 +741,204 @@ class TestPostgresDateFunctionsCompatibility(unittest.TestCase):
         with patch.object(postgres_date_functions, "_load_custom_module", return_value=module):
             self.assertFalse(postgres_date_functions.is_needed())
             self.assertFalse(postgres_date_functions.apply())
+
+
+class TestStockAgeingPostgresCursorCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import stock_ageing_postgres_cursor
+
+        stock_ageing_postgres_cursor._original = None
+        stock_ageing_postgres_cursor._patched = None
+
+    def test_postgres_buffers_sle_before_processing_and_restores_original(self):
+        from frappe_pg.compat.erpnext import stock_ageing_postgres_cursor
+
+        events = []
+
+        class FIFOSlots:
+            def __init__(self):
+                self.sle = None
+                self.filters = {"show_warehouse_wise_stock": True}
+                self.item_details = {"ok": True}
+
+            def generate(self):
+                stock_ledger_entries = self._get_stock_ledger_entries()
+                with frappe.db.unbuffered_cursor():  # noqa: F821
+                    return list(stock_ledger_entries)
+
+            def _get_bundle_wise_details(self, stock_ledger_entries):
+                return {}, {}
+
+            def prepare_stock_reco_voucher_wise_count(self):
+                events.append("prepare")
+
+            def _prefetch_batchwise_valuations(self):
+                events.append("prefetch-batch")
+
+            def _prefetch_valuation_methods(self):
+                events.append("prefetch-method")
+
+            def _get_stock_ledger_entries(self):
+                def rows():
+                    events.append("yield-1")
+                    yield {"name": "A"}
+                    events.append("yield-2")
+                    yield {"name": "B"}
+
+                return rows()
+
+            def _process_stock_ledger_entry(self, row, serials, batches):
+                events.append(f"process-{row['name']}")
+
+            def _recompute_moving_average_slots(self):
+                events.append("recompute")
+
+            def _rebalance_batch_slots(self):
+                events.append("rebalance")
+
+            def _aggregate_details_by_item(self, details):
+                return details
+
+        module = types.SimpleNamespace(FIFOSlots=FIFOSlots, get_float_precision=lambda: 6)
+        fake_frappe = types.SimpleNamespace(db=types.SimpleNamespace(db_type="postgres"))
+        original = FIFOSlots.generate
+        with (
+            patch.object(stock_ageing_postgres_cursor, "_load", return_value=module),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
+        ):
+            self.assertTrue(stock_ageing_postgres_cursor.is_needed())
+            self.assertTrue(stock_ageing_postgres_cursor.apply())
+            result = FIFOSlots().generate()
+            self.assertEqual(result, {"ok": True})
+            self.assertLess(events.index("yield-2"), events.index("process-A"))
+            self.assertEqual(events.count("process-A"), 1)
+            self.assertEqual(events.count("process-B"), 1)
+            self.assertTrue(stock_ageing_postgres_cursor.remove())
+            self.assertIs(FIFOSlots.generate, original)
+
+
+class TestProductBundleBalanceGroupingCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import product_bundle_balance_grouping
+
+        product_bundle_balance_grouping._original = None
+        product_bundle_balance_grouping._patched = None
+
+    def test_applies_only_to_grouped_query_that_selects_unused_name(self):
+        from frappe_pg.compat.erpnext import product_bundle_balance_grouping
+
+        def old(filters, items):
+            query = sle.select(sle.item_code, sle.warehouse, sle.name, Max(sle.posting_datetime))  # noqa: F821
+            return query.groupby(sle.item_code, sle.warehouse)  # noqa: F821
+
+        module = types.SimpleNamespace(get_item_wise_max_posting_datetime=old)
+        with patch.object(product_bundle_balance_grouping, "_load", return_value=module):
+            self.assertTrue(product_bundle_balance_grouping.is_needed())
+            self.assertTrue(product_bundle_balance_grouping.apply())
+            self.assertIs(
+                module.get_item_wise_max_posting_datetime, product_bundle_balance_grouping._compatible
+            )
+            self.assertFalse(product_bundle_balance_grouping.apply())
+            self.assertTrue(product_bundle_balance_grouping.remove())
+            self.assertIs(module.get_item_wise_max_posting_datetime, old)
+
+
+class TestOpeningInvoiceSavepointCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import opening_invoice_savepoint
+
+        opening_invoice_savepoint._original = None
+        opening_invoice_savepoint._patched = None
+
+    def test_applies_to_full_rollback_implementation_and_restores(self):
+        from frappe_pg.compat.erpnext import opening_invoice_savepoint
+
+        def old_start_import(invoices):
+            try:
+                return invoices
+            except Exception:
+                frappe.db.rollback()  # noqa: F821
+                doc.log_error("Opening invoice creation failed")  # noqa: F821
+
+        module = types.SimpleNamespace(start_import=old_start_import)
+        with patch.object(opening_invoice_savepoint, "_load", return_value=module):
+            self.assertTrue(opening_invoice_savepoint.is_needed())
+            self.assertTrue(opening_invoice_savepoint.apply())
+            self.assertIs(module.start_import, opening_invoice_savepoint._compatible_start_import)
+            self.assertFalse(opening_invoice_savepoint.apply())
+            self.assertTrue(opening_invoice_savepoint.remove())
+            self.assertIs(module.start_import, old_start_import)
+
+
+class TestAccountsReceivableGLBalanceCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import accounts_receivable_gl_balance
+
+        accounts_receivable_gl_balance._original = None
+        accounts_receivable_gl_balance._patched = None
+
+    def test_detects_legacy_grouped_as_list_shape_and_restores(self):
+        from frappe_pg.compat.erpnext import accounts_receivable_gl_balance
+
+        def old(report_date, company, account_type):
+            balance_calc_fields = ["party", "SUM(debit - credit) AS balance"]
+            return frappe.db.get_all(  # noqa: F821
+                "GL Entry", fields=balance_calc_fields, group_by="party", as_list=1
+            )
+
+        module = types.SimpleNamespace(get_gl_balance=old)
+        with patch.object(accounts_receivable_gl_balance, "_load", return_value=module):
+            self.assertTrue(accounts_receivable_gl_balance.is_needed())
+            self.assertTrue(accounts_receivable_gl_balance.apply())
+            self.assertIs(module.get_gl_balance, accounts_receivable_gl_balance._compatible)
+            self.assertTrue(accounts_receivable_gl_balance.remove())
+            self.assertIs(module.get_gl_balance, old)
+
+
+class TestPeriodClosingPostgresCursorCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import period_closing_postgres_cursor
+
+        period_closing_postgres_cursor._original = None
+        period_closing_postgres_cursor._patched = None
+
+    def test_postgres_buffers_gl_rows_and_restores_original(self):
+        from frappe_pg.compat.erpnext import period_closing_postgres_cursor
+
+        events = []
+
+        class PeriodClosingVoucher:
+            def get_account_balances_based_on_dimensions(self, report_type):
+                with frappe.db.unbuffered_cursor():  # noqa: F821
+                    return self.get_gl_entries_for_current_period(report_type, as_iterator=True)
+
+            def get_accounting_dimension_fields(self):
+                events.append("dimensions")
+
+            def get_gl_entries_for_current_period(
+                self, report_type, only_opening_entries=False, as_iterator=False
+            ):
+                events.append((report_type, only_opening_entries, as_iterator))
+                return [types.SimpleNamespace(value=1), types.SimpleNamespace(value=2)]
+
+            def set_account_balance_dict(self, gle, acc):
+                acc[gle.value] = True
+                return acc
+
+            def is_first_period_closing_voucher(self):
+                return False
+
+        module = types.SimpleNamespace(PeriodClosingVoucher=PeriodClosingVoucher)
+        fake_frappe = types.SimpleNamespace(db=types.SimpleNamespace(db_type="postgres"), _dict=dict)
+        original = PeriodClosingVoucher.get_account_balances_based_on_dimensions
+        with (
+            patch.object(period_closing_postgres_cursor, "_load", return_value=module),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
+        ):
+            self.assertTrue(period_closing_postgres_cursor.is_needed())
+            self.assertTrue(period_closing_postgres_cursor.apply())
+            result = PeriodClosingVoucher().get_account_balances_based_on_dimensions("Profit and Loss")
+            self.assertEqual(result, {1: True, 2: True})
+            self.assertIn(("Profit and Loss", False, False), events)
+            self.assertTrue(period_closing_postgres_cursor.remove())
+            self.assertIs(PeriodClosingVoucher.get_account_balances_based_on_dimensions, original)

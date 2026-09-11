@@ -1,8 +1,29 @@
 """Registry for narrowly scoped application-level PostgreSQL compatibility overrides."""
 
-from frappe_pg.compat.erpnext import batch_valuation_lock, payment_ledger_grouping, trends_group_by
+from frappe_pg.compat.erpnext import (
+    accounts_receivable_gl_balance,
+    batch_valuation_advisory_lock,
+    batch_valuation_lock,
+    bom_stock_analysis_grouping,
+    future_stock_voucher_lock,
+    manufacturing_grouping,
+    opening_invoice_savepoint,
+    payment_ledger_grouping,
+    payment_terms_status,
+    period_closing_fiscal_year,
+    period_closing_postgres_cursor,
+    pick_list_lock,
+    product_bundle_balance_grouping,
+    sales_order_elapsed_time,
+    stock_ageing_postgres_cursor,
+    stock_reservation_grouping,
+    stock_reservation_lock,
+    stock_reserved_qty,
+    trends_group_by,
+)
 from frappe_pg.compat.frappe import (
     goal_aggregation,
+    postgres_automatic_index_drop,
     postgres_boolean_values,
     postgres_date_functions,
     postgres_decimal_metadata,
@@ -12,7 +33,9 @@ from frappe_pg.compat.frappe import (
 )
 
 _COMPATIBILITY_OVERRIDES = (
+    accounts_receivable_gl_balance,
     goal_aggregation,
+    postgres_automatic_index_drop,
     postgres_boolean_values,
     postgres_date_functions,
     postgres_decimal_metadata,
@@ -21,7 +44,20 @@ _COMPATIBILITY_OVERRIDES = (
     unique_insert_transaction,
     trends_group_by,
     payment_ledger_grouping,
+    payment_terms_status,
+    sales_order_elapsed_time,
+    period_closing_fiscal_year,
     batch_valuation_lock,
+    batch_valuation_advisory_lock,
+    future_stock_voucher_lock,
+    manufacturing_grouping,
+    bom_stock_analysis_grouping,
+    stock_ageing_postgres_cursor,
+    stock_reservation_grouping,
+    pick_list_lock,
+    product_bundle_balance_grouping,
+    stock_reservation_lock,
+    stock_reserved_qty,
 )
 
 
