@@ -834,6 +834,8 @@ class TestStockAgeingPostgresCursorCompatibility(unittest.TestCase):
             def generate(self):
                 stock_ledger_entries = self.sle
                 with frappe.db.unbuffered_cursor():
+                    if stock_ledger_entries is None:
+                        stock_ledger_entries = self._get_stock_ledger_entries()
                     for row in stock_ledger_entries:
                         self._process_stock_ledger_entry(row, {}, {})
                 return self.item_details
