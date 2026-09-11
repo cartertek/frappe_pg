@@ -868,3 +868,28 @@ class TestOpeningInvoiceSavepointCompatibility(unittest.TestCase):
             self.assertFalse(opening_invoice_savepoint.apply())
             self.assertTrue(opening_invoice_savepoint.remove())
             self.assertIs(module.start_import, old_start_import)
+
+
+class TestAccountsReceivableGLBalanceCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import accounts_receivable_gl_balance
+
+        accounts_receivable_gl_balance._original = None
+        accounts_receivable_gl_balance._patched = None
+
+    def test_detects_legacy_grouped_as_list_shape_and_restores(self):
+        from frappe_pg.compat.erpnext import accounts_receivable_gl_balance
+
+        def old(report_date, company, account_type):
+            balance_calc_fields = ["party", "SUM(debit - credit) AS balance"]
+            return frappe.db.get_all(  # noqa: F821
+                "GL Entry", fields=balance_calc_fields, group_by="party", as_list=1
+            )
+
+        module = types.SimpleNamespace(get_gl_balance=old)
+        with patch.object(accounts_receivable_gl_balance, "_load", return_value=module):
+            self.assertTrue(accounts_receivable_gl_balance.is_needed())
+            self.assertTrue(accounts_receivable_gl_balance.apply())
+            self.assertIs(module.get_gl_balance, accounts_receivable_gl_balance._compatible)
+            self.assertTrue(accounts_receivable_gl_balance.remove())
+            self.assertIs(module.get_gl_balance, old)

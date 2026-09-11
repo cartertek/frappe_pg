@@ -1,6 +1,7 @@
 """Registry for narrowly scoped application-level PostgreSQL compatibility overrides."""
 
 from frappe_pg.compat.erpnext import (
+    accounts_receivable_gl_balance,
     batch_valuation_advisory_lock,
     batch_valuation_lock,
     bom_stock_analysis_grouping,
@@ -31,6 +32,7 @@ from frappe_pg.compat.frappe import (
 )
 
 _COMPATIBILITY_OVERRIDES = (
+    accounts_receivable_gl_balance,
     goal_aggregation,
     postgres_automatic_index_drop,
     postgres_boolean_values,
