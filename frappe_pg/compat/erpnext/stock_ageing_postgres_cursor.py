@@ -37,23 +37,24 @@ def _needs_patch(cls):
 def _compatible_generate(self):
     import frappe
 
-    # Keep upstream behavior unchanged when callers provide explicit SLE rows.
-    if self.sle is not None or frappe.db.db_type != "postgres":
+    if frappe.db.db_type != "postgres":
         return _original(self)
 
-    stock_ledger_entries = None
+    stock_ledger_entries = self.sle
     bundle_wise_serial_nos, bundle_wise_batch_nos = self._get_bundle_wise_details(stock_ledger_entries)
 
     self.prepare_stock_reco_voucher_wise_count()
     module = _load()
     self.float_precision = module.get_float_precision()
 
-    # Version-16 already prefetches these because nested queries are unsafe while
-    # streaming. PostgreSQL additionally cannot execute nested queries on the same
-    # named cursor, so fully consume the SLE iterator on the normal cursor first.
-    self._prefetch_batchwise_valuations()
-    self._prefetch_valuation_methods()
-    stock_ledger_entries = list(self._get_stock_ledger_entries())
+    # For the streaming path, resolve nested-query state before reading SLE rows,
+    # then fully consume the iterator on PostgreSQL's normal cursor. Explicit SLE
+    # callers already supplied their rows and only need to avoid the unsupported
+    # unbuffered_cursor() context used by upstream v15/v16.
+    if stock_ledger_entries is None:
+        self._prefetch_batchwise_valuations()
+        self._prefetch_valuation_methods()
+        stock_ledger_entries = list(self._get_stock_ledger_entries())
 
     for row in stock_ledger_entries:
         self._process_stock_ledger_entry(row, bundle_wise_serial_nos, bundle_wise_batch_nos)

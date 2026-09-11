@@ -820,6 +820,64 @@ class TestStockAgeingPostgresCursorCompatibility(unittest.TestCase):
             self.assertTrue(stock_ageing_postgres_cursor.remove())
             self.assertIs(FIFOSlots.generate, original)
 
+    def test_postgres_explicit_sle_avoids_unbuffered_cursor(self):
+        from frappe_pg.compat.erpnext import stock_ageing_postgres_cursor
+
+        events = []
+
+        class FIFOSlots:
+            def __init__(self):
+                self.sle = [{"name": "A"}, {"name": "B"}]
+                self.filters = {"show_warehouse_wise_stock": True}
+                self.item_details = {"ok": True}
+
+            def generate(self):
+                stock_ledger_entries = self.sle
+                with frappe.db.unbuffered_cursor():
+                    for row in stock_ledger_entries:
+                        self._process_stock_ledger_entry(row, {}, {})
+                return self.item_details
+
+            def _get_bundle_wise_details(self, rows):
+                events.append(("bundles", len(rows)))
+                return {}, {}
+
+            def prepare_stock_reco_voucher_wise_count(self):
+                events.append("prepare")
+
+            def _prefetch_batchwise_valuations(self):
+                raise AssertionError("explicit rows must not prefetch")
+
+            def _prefetch_valuation_methods(self):
+                raise AssertionError("explicit rows must not prefetch")
+
+            def _get_stock_ledger_entries(self):
+                raise AssertionError("explicit rows must not be replaced")
+
+            def _process_stock_ledger_entry(self, row, serials, batches):
+                events.append(f"process-{row['name']}")
+
+            def _recompute_moving_average_slots(self):
+                events.append("recompute")
+
+            def _rebalance_batch_slots(self):
+                events.append("rebalance")
+
+            def _aggregate_details_by_item(self, details):
+                return details
+
+        module = types.SimpleNamespace(FIFOSlots=FIFOSlots, get_float_precision=lambda: 6)
+        fake_frappe = types.SimpleNamespace(db=types.SimpleNamespace(db_type="postgres"))
+        with (
+            patch.object(stock_ageing_postgres_cursor, "_load", return_value=module),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
+        ):
+            self.assertTrue(stock_ageing_postgres_cursor.apply())
+            result = FIFOSlots().generate()
+            self.assertEqual(result, {"ok": True})
+            self.assertEqual(events[:3], [("bundles", 2), "prepare", "process-A"])
+            self.assertIn("process-B", events)
+
 
 class TestProductBundleBalanceGroupingCompatibility(unittest.TestCase):
     def tearDown(self):
