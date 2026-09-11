@@ -6,19 +6,21 @@ This module contains all SQL query transformation functions that convert
 MySQL-specific syntax to PostgreSQL-compatible syntax.
 """
 
+import re
+
 from frappe_pg.utils.regex_patterns import (
+    DATE_FORMAT_PATTERN,
     FORCE_INDEX_PATTERN,
-    USE_INDEX_PATTERN,
-    IGNORE_INDEX_PATTERN,
     IF_FUNCTION_PATTERN,
     IFNULL_PATTERN,
-    DATE_FORMAT_PATTERN
+    IGNORE_INDEX_PATTERN,
+    USE_INDEX_PATTERN,
 )
-
 
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
 
 def split_by_comma(text):
     """
@@ -48,7 +50,7 @@ def split_by_comma(text):
             if not in_string:
                 in_string = True
                 string_char = char
-            elif char == string_char and (i == 0 or text[i-1] != '\\'):
+            elif char == string_char and (i == 0 or text[i - 1] != '\\'):
                 in_string = False
                 string_char = None
             current.append(char)
@@ -75,6 +77,7 @@ def split_by_comma(text):
 # ============================================================================
 # Core Transformation Functions
 # ============================================================================
+
 
 def convert_if_to_case(query):
     """
@@ -126,7 +129,7 @@ def convert_if_to_case(query):
             if prev_char.isalnum() or prev_char == '_':
                 # This is part of another word like "DIFF(", skip it
                 # Temporarily replace it to skip in this iteration
-                query = query[:start_pos] + '___NOTIF___(' + query[match.end():]
+                query = query[:start_pos] + '___NOTIF___(' + query[match.end() :]
                 continue
 
         if_start = match.end() - 1  # Position of opening parenthesis
@@ -145,7 +148,7 @@ def convert_if_to_case(query):
                 if not in_string:
                     in_string = True
                     string_char = char
-                elif char == string_char and (pos == 0 or query[pos-1] != '\\'):
+                elif char == string_char and (pos == 0 or query[pos - 1] != '\\'):
                     in_string = False
                     string_char = None
             elif not in_string:
@@ -158,19 +161,19 @@ def convert_if_to_case(query):
 
         if paren_count != 0:
             # Malformed query, mark and skip
-            query = query[:start_pos] + '___BADIF___(' + query[if_start + 1:]
+            query = query[:start_pos] + '___BADIF___(' + query[if_start + 1 :]
             continue
 
         # Extract the IF content
         if_end = pos
-        if_content = query[if_start + 1:if_end - 1]
+        if_content = query[if_start + 1 : if_end - 1]
 
         # Split by commas, respecting parentheses and strings
         parts = split_by_comma(if_content)
 
         if len(parts) != 3:
             # Invalid IF syntax, mark and skip
-            query = query[:start_pos] + '___BADIF___(' + query[if_start + 1:]
+            query = query[:start_pos] + '___BADIF___(' + query[if_start + 1 :]
             continue
 
         condition = parts[0].strip()
@@ -258,6 +261,336 @@ def convert_date_format(query):
     return DATE_FORMAT_PATTERN.sub(r"TO_CHAR(\1, 'YYYY-MM-DD')", query)
 
 
+_QUOTED_IDENTIFIER = r'"(?:[^"]|"")+"(?:\."(?:[^"]|"")+")*'
+
+
+def convert_numeric_truthiness(query):
+    """Convert bare numeric identifiers in boolean predicates to PostgreSQL booleans.
+
+    MariaDB accepts numeric expressions directly in ``WHERE``/``AND``/``OR``
+    predicates, treating zero as false and non-zero as true. PostgreSQL requires
+    an actual boolean expression. Frappe Query Builder can emit this shape when
+    an application combines a numeric field directly with ``&``/``|``.
+
+    This transformer intentionally handles only a bare quoted identifier used as
+    a boolean operand. It does not attempt to infer the type of arbitrary SQL
+    expressions.
+    """
+    operand = re.compile(
+        rf'(?P<prefix>\bWHERE\b|\bHAVING\b|\bON\b|\bAND\b|\bOR\b|\()'
+        rf'(?P<space>\s*)(?P<identifier>{_QUOTED_IDENTIFIER})'
+        rf'(?=(?P<trailing>\s*)(?P<suffix>\bAND\b|\bOR\b|\)|$))',
+        re.IGNORECASE,
+    )
+
+    def replace(match):
+        # ``("name")`` is equally valid as a function/group argument and does
+        # not establish boolean context. Require an adjacent AND/OR when the
+        # only prefix is an opening parenthesis. This still covers Frappe HR's
+        # ``("claimed_amount" AND "return_amount")`` query-builder output.
+        if match.group("prefix") == "(" and match.group("suffix") == ")":
+            return match.group(0)
+
+        # In ``value BETWEEN lower AND upper`` the AND token is part of the
+        # BETWEEN operator, not a boolean conjunction. Treating a numeric-looking
+        # upper bound as a boolean operand corrupts valid date/number ranges (and
+        # produced ``BETWEEN from_date AND (to_date <> 0)`` in HRMS).
+        if match.group("prefix").upper() == "AND":
+            before = query[: match.start()]
+            tail = re.split(r"\b(?:WHERE|HAVING|ON|OR|AND)\b|[()]", before, flags=re.IGNORECASE)[-1]
+            if re.search(r"\bBETWEEN\b", tail, re.IGNORECASE):
+                return match.group(0)
+
+        return f'{match.group("prefix")}{match.group("space")}({match.group("identifier")} <> 0)'
+
+    # Re-run until nested shapes such as ("claimed_amount" AND "return_amount")
+    # are fully normalized. Replacements are idempotent because ``<> 0`` no
+    # longer matches the bare-identifier lookahead.
+    while True:
+        transformed = operand.sub(replace, query)
+        if transformed == query:
+            return query
+        query = transformed
+
+
+def convert_mysql_double_quoted_literals(query):
+    """Convert unambiguous MySQL double-quoted string literals to SQL strings.
+
+    PostgreSQL treats double quotes as identifier delimiters. Frappe field names
+    do not contain spaces, so a double-quoted token containing whitespace on the
+    right side of a predicate is unambiguously a legacy MySQL string literal in
+    the application SQL we need to support (for example ``doctype = "HR Settings"``).
+
+    Deliberately leave identifier-shaped values such as ``"other_column"``
+    untouched because those may be real PostgreSQL identifiers.
+    """
+    literal = re.compile(
+        r'(?P<operator>=|<>|!=|<=|>=|<|>)' r'(?P<space>\s*)"(?P<value>[^"\r\n]*\s+[^"\r\n]*)"' r'(?!\s*\.)'
+    )
+    like_literal = re.compile(
+        r'(?P<operator>\b(?:LIKE|NOT\s+LIKE)\b)(?P<space>\s*)"(?P<value>[^"\r\n]*%[^"\r\n]*)"',
+        re.IGNORECASE,
+    )
+    in_list = re.compile(
+        r'(?P<field>(?<![.\w"])[A-Za-z_][A-Za-z0-9_$]*)' r'(?P<space>\s+IN\s*\()(?P<values>[^()]*)\)',
+        re.IGNORECASE,
+    )
+
+    def replace(match):
+        value = match.group("value").replace("'", "''")
+        return f'{match.group("operator")}{match.group("space")}\'{value}\''
+
+    def replace_in_list(match):
+        parts = [part.strip() for part in match.group("values").split(",")]
+        if not parts or any(not re.fullmatch(r'"[^"\r\n]*"', part) for part in parts):
+            return match.group(0)
+        values = ", ".join("'" + part[1:-1].replace("'", "''") + "'" for part in parts)
+        return f'{match.group("field")}{match.group("space")}{values})'
+
+    def replace_like_literal(match):
+        value = match.group("value")
+        # MySQL code sometimes embeds a DB-API placeholder inside the quoted
+        # LIKE pattern, e.g. ``LIKE "%%%s%%"``. Simply changing the quote
+        # characters would leave the placeholder inside a SQL string and
+        # psycopg would produce invalid SQL (``'%'value'%'``). Preserve the
+        # wildcard semantics with PostgreSQL concatenation instead.
+        if value == "%%%s%%":
+            return f"{match.group('operator')}{match.group('space')}'%%' || %s || '%%'"
+        value = value.replace("'", "''")
+        return f"{match.group('operator')}{match.group('space')}'{value}'"
+
+    query = literal.sub(replace, query)
+    query = like_literal.sub(replace_like_literal, query)
+    return in_list.sub(replace_in_list, query)
+
+
+def normalize_hrms_legacy_string_literals(query):
+    """Translate identifier-shaped string literals in two legacy HRMS raw queries.
+
+    PostgreSQL treats double quotes as identifiers. Older HRMS raw SQL uses
+    them for the ``Approved`` expense-claim status and the ``earnings`` salary
+    detail parentfield. Restrict these rewrites to their exact table/query
+    contexts rather than treating arbitrary identifier-shaped tokens as strings.
+    """
+    if re.search(
+        r'\bFROM\s+"tabExpense Claim Advance"\s+eca\s*,\s*"tabExpense Claim"\s+ec', query, re.IGNORECASE
+    ):
+        query = re.sub(
+            r'\bec\.approval_status\s*=\s*"Approved"',
+            "ec.approval_status='Approved'",
+            query,
+            flags=re.IGNORECASE,
+        )
+
+    if re.search(r'\bFROM\s+"tabSalary Slip"\s+ss\s*,\s*"tabSalary Detail"\s+sd', query, re.IGNORECASE):
+        query = re.sub(
+            r'\bsd\.parentfield\s*=\s*"earnings"',
+            "sd.parentfield='earnings'",
+            query,
+            flags=re.IGNORECASE,
+        )
+
+    # Older HRMS raw SQL uses MySQL's single-quoted output-alias syntax,
+    # e.g. ``employee_name AS 'name'`` and ``SUM(...) AS 'total_amount'``.
+    # PostgreSQL requires an identifier alias here. Limit this to recognizable
+    # HRMS tables so normal SQL string literals are untouched.
+    if re.search(
+        r'\bFROM\s+"tab(?:Employee|Employee Benefit Claim|Salary Slip|Salary Detail|Expense Claim(?: Advance)?)"',
+        query,
+        re.IGNORECASE,
+    ):
+        query = re.sub(
+            r"\bAS\s+'(?P<alias>[A-Za-z_][A-Za-z0-9_]*)'",
+            lambda match: f'AS "{match.group("alias")}"',
+            query,
+            flags=re.IGNORECASE,
+        )
+    return query
+
+
+def normalize_hrms_employee_event_date_parts(query):
+    """Cast HRMS v15 employee-reminder date parameters for PostgreSQL DATE_PART."""
+    if not re.search(r'\bFROM\s+"tabEmployee"', query, re.IGNORECASE):
+        return query
+    if not re.search(
+        r'DATE_PART\s*\(\s*\'day\'\s*,\s*(?:date_of_birth|date_of_joining)\s*\)', query, re.IGNORECASE
+    ):
+        return query
+    return re.sub(
+        r"date_part\s*\(\s*'(?P<part>day|month|year)'\s*,\s*(?P<param>%\([A-Za-z_][A-Za-z0-9_]*\)s)\s*\)",
+        lambda match: f"date_part('{match.group('part')}', CAST({match.group('param')} AS date))",
+        query,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_hrms_work_anniversary_date_projection(query):
+    """Backport HRMS v16's date_of_joining projection to the v15 PostgreSQL reminder query."""
+    if not re.search(r'\bFROM\s+"tabEmployee"', query, re.IGNORECASE):
+        return query
+    if not re.search(r'DATE_PART\s*\(\s*\'day\'\s*,\s*date_of_joining\s*\)', query, re.IGNORECASE):
+        return query
+    select_match = re.search(r'\bSELECT\b(?P<select>.+?)\bFROM\b', query, re.IGNORECASE | re.DOTALL)
+    if not select_match or re.search(
+        r'(?<![A-Za-z0-9_])"?date_of_joining"?(?![A-Za-z0-9_])', select_match.group("select"), re.IGNORECASE
+    ):
+        return query
+    replacement = select_match.group(0)[:-4].rstrip() + ', "date_of_joining" FROM'
+    return query[: select_match.start()] + replacement + query[select_match.end() :]
+
+
+def normalize_hrms_staffing_plan_aggregate(query):
+    """Group HRMS's legacy staffing-plan aggregate by every projected dimension."""
+    required = (
+        r'\bSELECT\s+DISTINCT\s+spd\.parent\s*,',
+        r'\bFROM\s+"tabStaffing Plan Detail"\s+spd\s*,\s*"tabStaffing Plan"\s+sp',
+        r'\bSUM\s*\(\s*spd\.vacancies\s*\)',
+        r'\bspd\.designation\b',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE | re.DOTALL) for pattern in required):
+        return query
+    if re.search(r'\bGROUP\s+BY\b', query, re.IGNORECASE):
+        return query
+    return query.rstrip() + " GROUP BY spd.parent, sp.from_date, sp.to_date, sp.name, spd.designation"
+
+
+def normalize_hrms_income_tax_salary_slip_grouping(query):
+    """Aggregate the unused Salary Slip name in HRMS's grouped exemption query."""
+    required = (
+        r'\bFROM\s+"tabSalary Slip"',
+        r'\b(?:INNER\s+)?JOIN\s+"tabSalary Detail"',
+        r'\bSUM\s*\(\s*"tabSalary Detail"\."amount"\s*\)',
+        r'\bGROUP\s+BY\s+"tabSalary Slip"\."employee"\s*,\s*"tabSalary Detail"\."salary_component"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE | re.DOTALL) for pattern in required):
+        return query
+    return re.sub(
+        r'(?P<name>"tabSalary Slip"\."name")(?P<comma>\s*,)',
+        r'MIN(\g<name>) AS "name"\g<comma>',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_hrms_shift_assignment_empty_end_date(query):
+    """Treat HRMS Shift Assignment empty end dates as NULL on PostgreSQL.
+
+    MariaDB tolerates comparing a Date column to the empty string. PostgreSQL
+    does not. Restrict the rewrite to HRMS's Shift Assignment ``end_date``
+    predicates, where the application already treats NULL and empty as the same
+    open-ended value.
+    """
+    if not re.search(r'\bFROM\s+"tabShift Assignment"', query, re.IGNORECASE):
+        return query
+    literal_pattern = re.compile(
+        r'(?P<field>(?:"tabShift Assignment"\.)?"end_date")\s*=\s*\'\'',
+        re.IGNORECASE,
+    )
+    query = literal_pattern.sub(r'\g<field> IS NULL', query)
+    parameter_pattern = re.compile(
+        r'(?P<field>(?:"tabShift Assignment"\.)?"end_date")\s*=\s*%\([A-Za-z_][A-Za-z0-9_]*\)s',
+        re.IGNORECASE,
+    )
+    return parameter_pattern.sub(r'\g<field> IS NULL', query)
+
+
+def normalize_hrms_skill_assessment_group_order(query):
+    """Aggregate HRMS Skill Assessment idx when ordering a grouped rating query."""
+    required = (
+        r'\bFROM\s+"tabSkill Assessment"',
+        r'AVG\s*\(\s*"tabSkill Assessment"\."rating"\s*\)',
+        r'GROUP\s+BY\s+"tabSkill Assessment"\."skill"',
+        r'ORDER\s+BY\s+"tabSkill Assessment"\."idx"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    return re.sub(
+        r'ORDER\s+BY\s+("tabSkill Assessment"\."idx")',
+        r'ORDER BY MIN(\1)',
+        query,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+
+
+def normalize_hrms_reserved_user_alias(query):
+    """Quote HRMS's legacy ``user`` alias, which is reserved by PostgreSQL."""
+    if not re.search(r'\bFROM\s+"tabHas Role"\s+has_role', query, re.IGNORECASE):
+        return query
+    if not re.search(r'\bLEFT\s+JOIN\s+"tabUser"\s+user\b', query, re.IGNORECASE):
+        return query
+    query = re.sub(r'(\bLEFT\s+JOIN\s+"tabUser"\s+)user\b', r'\1"user"', query, flags=re.IGNORECASE)
+    return re.sub(r'(?<!["A-Za-z0-9_])user\.', '"user".', query, flags=re.IGNORECASE)
+
+
+def normalize_hrms_shift_attendance_grouping(query):
+    """Preserve one Attendance row while aggregating functionally-dependent joined values.
+
+    The legacy report groups by Attendance.name to collapse joined check-in rows,
+    while selecting check-in shift boundaries and Shift Type flags outside the
+    GROUP BY. MariaDB permits that; PostgreSQL does not. These values are constant
+    for an attendance/shift, so MAX preserves the legacy single-row shape.
+    """
+    required = (
+        r'\bFROM\s+"tabAttendance"',
+        r'\bJOIN\s+"tabShift Type"',
+        r'\bJOIN\s+"tabEmployee Checkin"',
+        r'\bGROUP\s+BY\s+"tabAttendance"\."name"',
+    )
+    if any(not re.search(pattern, query, re.IGNORECASE) for pattern in required):
+        return query
+    fields = (
+        'shift_start',
+        'shift_end',
+        'shift_actual_start',
+        'shift_actual_end',
+        'enable_late_entry_marking',
+        'late_entry_grace_period',
+        'enable_early_exit_marking',
+        'early_exit_grace_period',
+    )
+    for field in fields:
+        query = re.sub(
+            rf'(?<!MAX\()(?P<expr>"tab(?:Employee Checkin|Shift Type)"\."{field}")',
+            rf'MAX(\g<expr>) AS "{field}"',
+            query,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return query
+
+
+def convert_mysql_update_join(query):
+    """Convert the simple MySQL ``UPDATE ... JOIN`` form to PostgreSQL ``FROM``.
+
+    Handles the single-inner-join form emitted by Frappe Query Builder and used
+    by application migration patches. More complex multi-join UPDATE statements
+    are intentionally left unchanged rather than guessed at.
+    """
+    pattern = re.compile(
+        rf'^\s*UPDATE\s+(?P<target>{_QUOTED_IDENTIFIER})\s+(?P<target_alias>"[^"]+")\s+'
+        rf'JOIN\s+(?P<joined>{_QUOTED_IDENTIFIER})\s+(?P<joined_alias>"[^"]+")\s+'
+        r'ON\s+(?P<join_condition>.+?)\s+SET\s+(?P<set_clause>.+?)\s+WHERE\s+(?P<where_clause>.+?)\s*;?\s*$',
+        re.IGNORECASE | re.DOTALL,
+    )
+    match = pattern.match(query)
+    if not match or re.search(r"\bJOIN\b", match.group("join_condition"), re.IGNORECASE):
+        return query
+
+    target_alias = match.group("target_alias")
+    set_clause = re.sub(
+        r'(?<![\w"])' + re.escape(target_alias) + r'\.',
+        '',
+        match.group("set_clause"),
+    )
+    return (
+        f'UPDATE {match.group("target")} AS {target_alias} '
+        f'SET {set_clause} FROM {match.group("joined")} AS {match.group("joined_alias")} '
+        f'WHERE {match.group("join_condition")} AND {match.group("where_clause")}'
+    )
+
+
 def apply_all_query_transformations(query):
     """
     Apply all query transformations in the correct order.
@@ -271,6 +604,9 @@ def apply_all_query_transformations(query):
     2. Convert IF() to CASE WHEN (complex, must be done before other conversions)
     3. Convert IFNULL to COALESCE (simple replacement)
     4. Convert DATE_FORMAT to TO_CHAR (simple replacement)
+    5. Convert MySQL numeric truthiness in boolean predicates
+    6. Convert unambiguous double-quoted string literals
+    7. Convert simple MySQL UPDATE ... JOIN statements
 
     Args:
         query: SQL query string
@@ -292,10 +628,23 @@ def apply_all_query_transformations(query):
     query = convert_if_to_case(query)
     query = convert_ifnull_to_coalesce(query)
     query = convert_date_format(query)
+    query = convert_numeric_truthiness(query)
+    query = convert_mysql_double_quoted_literals(query)
+    query = normalize_hrms_legacy_string_literals(query)
+    query = normalize_hrms_employee_event_date_parts(query)
+    query = normalize_hrms_work_anniversary_date_projection(query)
+    query = normalize_hrms_staffing_plan_aggregate(query)
+    query = normalize_hrms_income_tax_salary_slip_grouping(query)
+    query = normalize_hrms_shift_assignment_empty_end_date(query)
+    query = normalize_hrms_skill_assessment_group_order(query)
+    query = normalize_hrms_reserved_user_alias(query)
+    query = normalize_hrms_shift_attendance_grouping(query)
+    query = convert_mysql_update_join(query)
 
     # Debug: Log if IF() is still present after transformation
     if 'IF(' in query.upper():
         import re
+
         print("\n" + "=" * 80)
         print("⚠️  WARNING: IF() still present after transformation!")
         print("=" * 80)
@@ -313,7 +662,7 @@ def apply_all_query_transformations(query):
             first_if = if_positions[0]
             context_start = max(0, first_if - 50)
             context_end = min(len(query), first_if + 100)
-            print(f"\nFirst unconverted IF() context:")
+            print("\nFirst unconverted IF() context:")
             print(f"...{query[context_start:context_end]}...")
         print("=" * 80 + "\n")
 
