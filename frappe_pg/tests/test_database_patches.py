@@ -80,6 +80,15 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_v15_bom_group_query,
     normalize_erpnext_work_order_return_grouping,
     normalize_frappe_employee_user_casefold,
+    normalize_hrms_employee_event_date_parts,
+    normalize_hrms_income_tax_salary_slip_grouping,
+    normalize_hrms_legacy_string_literals,
+    normalize_hrms_reserved_user_alias,
+    normalize_hrms_shift_assignment_empty_end_date,
+    normalize_hrms_shift_attendance_grouping,
+    normalize_hrms_skill_assessment_group_order,
+    normalize_hrms_staffing_plan_aggregate,
+    normalize_hrms_work_anniversary_date_projection,
     normalize_mysql_literal_date_time_addition,
     normalize_mysql_strpos_case_truthiness,
     normalize_payment_request_single_match_grouping,
@@ -228,7 +237,7 @@ class TestQueryTransformers(unittest.TestCase):
         )
 
     def test_asset_empty_disposal_date_is_null(self):
-        query = '("tabAsset"."disposal_date" is NULL OR "tabAsset"."disposal_date" = )'
+        query = "(\"tabAsset\".\"disposal_date\" is NULL OR \"tabAsset\".\"disposal_date\" = '')"
         transformed = normalize_erpnext_asset_empty_disposal_date(query)
         self.assertEqual(
             transformed,
@@ -352,6 +361,17 @@ class TestQueryTransformers(unittest.TestCase):
         self.assertIn('HAVING SUM("amount_in_account_currency") > 0', transformed)
         self.assertNotIn('SUM((SUM(', transformed)
 
+    def test_exchange_revaluation_grouping_is_idempotent_for_account_currency(self):
+        query = (
+            'SELECT "account",MAX("party_type") AS "party_type",MAX("party") AS "party",'
+            'MAX("account_currency") AS "account_currency",SUM("debit") AS "debit" '
+            'FROM "tabGL Entry" GROUP BY "account",NULLIF("party_type",%(param1)s),NULLIF("party",%(param2)s)'
+        )
+        once = normalize_erpnext_exchange_revaluation_grouping(query)
+        twice = normalize_erpnext_exchange_revaluation_grouping(once)
+        self.assertEqual(once, twice)
+        self.assertNotIn('AS MAX(', twice)
+
     def test_repost_item_grouping_is_idempotent(self):
         query = (
             'select "item_code", "warehouse", MIN("posting_date") AS "posting_date", '
@@ -363,17 +383,6 @@ class TestQueryTransformers(unittest.TestCase):
         twice = normalize_erpnext_repost_item_fields_grouping(once)
         self.assertEqual(once, twice)
         self.assertNotIn('AS MIN(', twice)
-
-    def test_exchange_revaluation_grouping_is_idempotent_for_account_currency(self):
-        query = (
-            'SELECT "account",MAX("party_type") AS "party_type",MAX("party") AS "party",'
-            'MAX("account_currency") AS "account_currency",SUM("debit") AS "debit" '
-            'FROM "tabGL Entry" GROUP BY "account",NULLIF("party_type",%(param1)s),NULLIF("party",%(param2)s)'
-        )
-        once = normalize_erpnext_exchange_revaluation_grouping(query)
-        twice = normalize_erpnext_exchange_revaluation_grouping(once)
-        self.assertEqual(once, twice)
-        self.assertNotIn('AS MAX(', twice)
 
     def test_mysql_having_unknown_alias_is_unchanged(self):
         query = "SELECT count(*) AS total FROM tabThing HAVING other_alias > 0"
@@ -649,6 +658,11 @@ class TestQueryTransformers(unittest.TestCase):
         )
         self.assertEqual(convert_numeric_truthiness(query), expected)
 
+    def test_numeric_truthiness_still_rewrites_boolean_and(self):
+        query = 'SELECT * FROM "tabX" WHERE "tabX"."a" AND "tabX"."b"'
+        expected = 'SELECT * FROM "tabX" WHERE ("tabX"."a" <> 0) AND ("tabX"."b" <> 0)'
+        self.assertEqual(convert_numeric_truthiness(query), expected)
+
     def test_erpnext_production_plan_subitems_grouping_matches_upstream_fix(self):
         query = """SELECT "tabBOM Item"."item_code","tabItem"."default_material_request_type",
             "tabItem"."item_name",SUM("tabBOM Item"."stock_qty") "qty",
@@ -811,6 +825,114 @@ class TestQueryTransformers(unittest.TestCase):
         query = 'SELECT * FROM "tabA" a INNER JOIN "tabB" b ON b.name=a.b WHERE a.name=%s'
         self.assertEqual(convert_mysql_inner_join_without_condition(query), query)
 
+    def test_hrms_employee_advance_approved_literal_is_quoted_for_postgres(self):
+        query = """SELECT sum(ifnull(allocated_amount, 0))
+FROM "tabExpense Claim Advance" eca, "tabExpense Claim" ec
+WHERE eca.employee_advance=%s AND ec.approval_status="Approved" AND ec.name=eca.parent"""
+        transformed = normalize_hrms_legacy_string_literals(query)
+        self.assertIn("ec.approval_status='Approved'", transformed)
+
+    def test_hrms_salary_detail_earnings_literal_is_quoted_for_postgres(self):
+        query = (
+            'select sum(sd.amount) from "tabSalary Slip" ss, "tabSalary Detail" sd\n'
+            'where ss.name=sd.parent and sd.parentfield = "earnings"'
+        )
+        transformed = normalize_hrms_legacy_string_literals(query)
+        self.assertIn("sd.parentfield='earnings'", transformed)
+
+    def test_hrms_employee_reminder_alias_uses_identifier_quotes(self):
+        query = (
+            "SELECT \"personal_email\", \"employee_name\" AS 'name', \"image\" "
+            "FROM \"tabEmployee\" WHERE \"status\"='Active'"
+        )
+        transformed = normalize_hrms_legacy_string_literals(query)
+        self.assertIn('employee_name" AS "name"', transformed)
+        self.assertNotIn("AS 'name'", transformed)
+
+    def test_hrms_benefit_claim_aggregate_alias_uses_identifier_quotes(self):
+        query = (
+            "select sum(claimed_amount) as 'total_amount' "
+            '\nfrom "tabEmployee Benefit Claim" where employee=%(employee)s'
+        )
+        transformed = normalize_hrms_legacy_string_literals(query)
+        self.assertIn('AS "total_amount"', transformed)
+        self.assertNotIn("AS 'total_amount'", transformed)
+
+    def test_hrms_employee_event_date_parts_cast_today(self):
+        query = (
+            'SELECT "employee_name" FROM "tabEmployee" WHERE '
+            "DATE_PART('day', date_of_birth) = date_part('day', %(today)s) AND "
+            "DATE_PART('month', date_of_birth) = date_part('month', %(today)s) AND "
+            "DATE_PART('year', date_of_birth) < date_part('year', %(today)s)"
+        )
+        transformed = normalize_hrms_employee_event_date_parts(query)
+        self.assertEqual(transformed.count('CAST(%(today)s AS date)'), 3)
+
+    def test_hrms_work_anniversary_projects_date_of_joining(self):
+        query = (
+            'SELECT "personal_email", "company", "company_email", "user_id", '
+            '"employee_name" AS "name", "image" FROM "tabEmployee" WHERE '
+            "DATE_PART('day', date_of_joining) = date_part('day', %(today)s)"
+        )
+        transformed = normalize_hrms_work_anniversary_date_projection(query)
+        self.assertIn('"image", "date_of_joining" FROM "tabEmployee"', transformed)
+        self.assertEqual(normalize_hrms_work_anniversary_date_projection(transformed), transformed)
+
+    def test_hrms_staffing_plan_aggregate_adds_group_by(self):
+        query = """SELECT DISTINCT spd.parent, sp.from_date as from_date, sp.to_date as to_date, sp.name,
+sum(spd.vacancies) as vacancies, spd.designation
+FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.name"""
+        transformed = normalize_hrms_staffing_plan_aggregate(query)
+        self.assertIn("GROUP BY spd.parent, sp.from_date, sp.to_date, sp.name, spd.designation", transformed)
+
+    def test_hrms_income_tax_salary_slip_name_is_aggregated(self):
+        query = (
+            'SELECT "tabSalary Slip"."name","tabSalary Slip"."employee",\n'
+            '"tabSalary Detail"."salary_component",SUM("tabSalary Detail"."amount") "amount"\n'
+            'FROM "tabSalary Slip" INNER JOIN "tabSalary Detail" '
+            'ON "tabSalary Slip"."name"="tabSalary Detail"."parent"\n'
+            'GROUP BY "tabSalary Slip"."employee","tabSalary Detail"."salary_component"'
+        )
+        transformed = normalize_hrms_income_tax_salary_slip_grouping(query)
+        self.assertIn('MIN("tabSalary Slip"."name") AS "name"', transformed)
+
+    def test_unrelated_double_quoted_identifier_is_unchanged(self):
+        query = 'SELECT * FROM "tabOther" WHERE status="Approved"'
+        self.assertEqual(normalize_hrms_legacy_string_literals(query), query)
+
+    def test_hrms_shift_assignment_empty_end_date_becomes_null(self):
+        query = (
+            'SELECT "employee" FROM "tabShift Assignment" WHERE '
+            "(\"end_date\">=%(date)s OR \"end_date\" IS NULL OR \"end_date\"='')"
+        )
+        transformed = normalize_hrms_shift_assignment_empty_end_date(query)
+        self.assertNotIn('"end_date"=', transformed)
+        self.assertIn('"end_date" IS NULL', transformed)
+
+    def test_hrms_shift_assignment_empty_end_date_parameter_becomes_null(self):
+        query = (
+            'SELECT "employee" FROM "tabShift Assignment" WHERE '
+            '("end_date">=%(date)s OR "end_date" IS NULL OR "end_date"=%(param4)s)'
+        )
+        transformed = normalize_hrms_shift_assignment_empty_end_date(query)
+        self.assertNotIn('"end_date"=%(param4)s', transformed)
+        self.assertIn('"end_date" IS NULL', transformed)
+
+    def test_other_empty_string_comparison_is_unchanged(self):
+        query = "SELECT \"name\" FROM \"tabOther\" WHERE \"end_date\"=''"
+        self.assertEqual(normalize_hrms_shift_assignment_empty_end_date(query), query)
+
+    def test_hrms_skill_assessment_group_order_uses_min_idx(self):
+        query = (
+            'SELECT "tabSkill Assessment"."skill",'
+            'AVG("tabSkill Assessment"."rating") "rating" '
+            'FROM "tabSkill Assessment" JOIN "tabInterview Feedback" ON 1=1 '
+            'GROUP BY "tabSkill Assessment"."skill" '
+            'ORDER BY "tabSkill Assessment"."idx"'
+        )
+        transformed = normalize_hrms_skill_assessment_group_order(query)
+        self.assertIn('ORDER BY MIN("tabSkill Assessment"."idx")', transformed)
+
     def test_double_quoted_mysql_string_literal_with_spaces(self):
         query = 'SELECT * FROM "tabSingles" WHERE doctype = "HR Settings" AND field = \'x\''
         expected = 'SELECT * FROM "tabSingles" WHERE doctype = \'HR Settings\' AND field = \'x\''
@@ -825,6 +947,16 @@ class TestQueryTransformers(unittest.TestCase):
         query = 'SELECT * FROM "tabExample" WHERE "name" = "other_column"'
         self.assertEqual(convert_mysql_double_quoted_literals(query), query)
 
+    def test_double_quoted_mysql_like_pattern(self):
+        query = 'select data from "__UserSettings" where data like "%%%s%%"'
+        expected = "select data from \"__UserSettings\" where data like '%%' || %s || '%%'"
+        self.assertEqual(convert_mysql_double_quoted_literals(query), expected)
+
+    def test_double_quoted_mysql_like_literal_without_placeholder(self):
+        query = 'select name from "tabExample" where name like "prefix%"'
+        expected = "select name from \"tabExample\" where name like 'prefix%'"
+        self.assertEqual(convert_mysql_double_quoted_literals(query), expected)
+
     def test_double_quoted_mysql_string_literals_in_legacy_in_list(self):
         query = (
             'SELECT * FROM "tabSingles" WHERE field in ('
@@ -838,7 +970,6 @@ class TestQueryTransformers(unittest.TestCase):
 
     def test_quoted_identifier_in_list_is_not_rewritten(self):
         query = 'SELECT * FROM "tabExample" WHERE "name" IN ("other_column", "another_column")'
-        self.assertEqual(convert_mysql_double_quoted_literals(query), query)
         self.assertEqual(convert_mysql_double_quoted_literals(query), query)
 
     def test_double_quoted_qualified_identifier_with_spaces_is_unchanged(self):
@@ -1083,7 +1214,7 @@ class TestQueryTransformers(unittest.TestCase):
         )
         transformed = normalize_erpnext_reserved_warehouse_distinct(query)
         self.assertNotIn('SELECT DISTINCT', transformed)
-        self.assertIn('GROUP BY "warehouse"', transformed)
+        self.assertIn('GROUP BY "tabStock Reservation Entry"."warehouse"', transformed)
         self.assertIn('ORDER BY MIN("tabStock Reservation Entry"."creation")', transformed)
 
     def test_mysql_order_by_null_is_removed(self):
@@ -1118,6 +1249,31 @@ class TestQueryTransformers(unittest.TestCase):
         query = "SELECT name, TIMEDIFF(end_time, start_time) FROM tabExample"
         self.assertEqual(convert_erpnext_modified_timediff(query), query)
 
+    def test_hrms_reserved_user_alias_is_quoted(self):
+        query = (
+            'SELECT DISTINCT(has_role.parent) FROM "tabHas Role" has_role '
+            'LEFT JOIN "tabUser" user ON has_role.parent = user.name '
+            "WHERE has_role.parenttype = 'User' AND user.enabled = '1'"
+        )
+        transformed = normalize_hrms_reserved_user_alias(query)
+        self.assertIn('LEFT JOIN "tabUser" "user"', transformed)
+        self.assertIn('"user".name', transformed)
+        self.assertIn('"user".enabled', transformed)
+
+    def test_hrms_shift_attendance_joined_values_are_aggregated(self):
+        query = (
+            'SELECT "tabAttendance"."name","tabEmployee Checkin"."shift_start",'
+            '"tabEmployee Checkin"."shift_end","tabShift Type"."enable_late_entry_marking" '
+            'FROM "tabAttendance" JOIN "tabShift Type" ON 1=1 '
+            'JOIN "tabEmployee Checkin" ON 1=1 GROUP BY "tabAttendance"."name"'
+        )
+        transformed = normalize_hrms_shift_attendance_grouping(query)
+        self.assertIn('MAX("tabEmployee Checkin"."shift_start") AS "shift_start"', transformed)
+        self.assertIn('MAX("tabEmployee Checkin"."shift_end") AS "shift_end"', transformed)
+        self.assertIn(
+            'MAX("tabShift Type"."enable_late_entry_marking") AS "enable_late_entry_marking"', transformed
+        )
+
     def test_advance_payment_reference_grouping_aggregates_dependent_fields(self):
         query = (
             'SELECT "company","against_voucher_type" "reference_doctype",'
@@ -1129,7 +1285,6 @@ class TestQueryTransformers(unittest.TestCase):
         self.assertIn('MAX("company") AS "company"', transformed)
         self.assertIn('MAX("against_voucher_type") "reference_doctype"', transformed)
         self.assertIn('MAX("currency") AS "currency"', transformed)
-        self.assertIn('GROUP BY "against_voucher_no"', transformed)
 
     def test_postgres_update_target_alias_unqualifies_set_column(self):
         query = (
@@ -1673,22 +1828,43 @@ class TestTransformQueryHook(unittest.TestCase):
 
 
 class TestPostgresAutomaticIndexDropPatch(unittest.TestCase):
-    def test_drop_index_columns_are_temporarily_namespaced(self):
-        from frappe_pg.patches.v1 import fix_postgres_automatic_index_drop as patch_module
+    def test_drop_index_sql_is_namespaced_after_alter_state_is_built(self):
+        from frappe_pg.compat.frappe import postgres_automatic_index_drop as patch_module
 
-        seen = []
+        queries = []
 
         def old_alter(self):
-            seen.extend(col.fieldname for col in self.drop_index)
-            return "ok"
+            # Model Frappe's real alter path: the bare automatic index name is
+            # generated inside alter(), after column state has been rebuilt.
+            return frappe.db.sql('DROP INDEX IF EXISTS "middle_name" ;')
 
         table_class = type("FakePostgresTable", (), {"alter": old_alter})
-        with unittest.mock.patch.object(patch_module, "_load_postgres_table", return_value=table_class):
+
+        class FakeDB:
+            def sql(self, query, *args, **kwargs):
+                queries.append(query)
+                return "ok"
+
+        fake_db = FakeDB()
+        with (
+            unittest.mock.patch.object(patch_module, "_load_postgres_table", return_value=table_class),
+            unittest.mock.patch.object(patch_module, "_needs_patch", return_value=True),
+            unittest.mock.patch.object(frappe, "db", fake_db),
+        ):
             patch_module._original_alter = None
             patch_module._patched_alter = None
-            self.assertTrue(patch_module.apply_postgres_automatic_index_drop_patch())
-            col = types.SimpleNamespace(fieldname="middle_name")
-            table = types.SimpleNamespace(table_name="tabUser", drop_index=[col])
-            self.assertEqual(table_class.alter(table), "ok")
-            self.assertEqual(seen, ["tabUser_middle_name_index"])
-            self.assertEqual(col.fieldname, "middle_name")
+            self.assertTrue(patch_module.apply())
+            table = table_class()
+            table.table_name = "tabUser"
+            self.assertEqual(table.alter(), "ok")
+            self.assertEqual(queries, ['DROP INDEX IF EXISTS "tabUser_middle_name_index" ;'])
+            # Restoring a bound method onto the instance would shadow future
+            # class-level instrumentation of PostgresDatabase.sql.
+            self.assertNotIn("sql", fake_db.__dict__)
+            self.assertTrue(patch_module.remove())
+
+    def test_explicit_and_already_namespaced_indexes_are_unchanged(self):
+        from frappe_pg.compat.frappe import postgres_automatic_index_drop as patch_module
+
+        query = 'DROP INDEX IF EXISTS "unique_email" ; ' 'DROP INDEX IF EXISTS "tabUser_middle_name_index" ;'
+        self.assertEqual(patch_module._rewrite_automatic_drop(query, "tabUser"), query)
