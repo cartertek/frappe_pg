@@ -577,6 +577,21 @@ jobs:
               tax_test.write_text(source.replace(marker, replacement, 1))
           PYFIX
 
+      - name: Expose v15 Period Closing Voucher test failures
+        working-directory: /home/runner/frappe-bench
+        run: |
+          python3 - <<'PYFIX'
+          from pathlib import Path
+          path = Path("apps/erpnext/erpnext/accounts/doctype/period_closing_voucher/period_closing_voucher.py")
+          source = path.read_text()
+          old = "\texcept Exception as e:\n\t\tfrappe.db.rollback()\n\t\tfrappe.log_error(title=_(\"Period Closing Voucher {0} GL Entry Processing Failed\").format(doc.name))\n"
+          new = "\texcept Exception as e:\n\t\tif frappe.flags.in_test:\n\t\t\traise\n\t\tfrappe.db.rollback()\n\t\tfrappe.log_error(title=_(\"Period Closing Voucher {0} GL Entry Processing Failed\").format(doc.name))\n"
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("ERPNext v15 PCV diagnostic marker not found")
+              path.write_text(source.replace(old, new, 1))
+          PYFIX
+
       - name: Create reusable PostgreSQL ERPNext fixture
         working-directory: /home/runner/frappe-bench
         env:
@@ -926,9 +941,9 @@ jobs:
           bench get-app --branch "version-15" hrms https://github.com/frappe/hrms.git
           bench setup requirements --dev hrms
           bench --site test_site install-app hrms
-          cd sites
-          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app hrms
-          cd ..
+          # Match upstream CI: snapshot installed HRMS before app-global test setup.
+          # Each fresh shard runs HRMS before_tests and its file dependencies once.
+          rm -f sites/test_site/.test_records.jsonl
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
       - name: Pack reusable HRMS fixture
         run: tar -C /home/runner -cf "$RUNNER_TEMP/frappe-bench.tar" frappe-bench
@@ -1067,9 +1082,9 @@ jobs:
               roster.write_text(source.replace(old, new, 1))
           PYFIX
           bench --site test_site install-app hrms
-          cd sites
-          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app hrms
-          cd ..
+          # Match upstream CI: snapshot installed HRMS before app-global test setup.
+          # Each fresh shard runs HRMS before_tests and its file dependencies once.
+          rm -f sites/test_site/.test_records.jsonl
           pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
       - name: Pack reusable HRMS fixture
         run: tar -C /home/runner -cf "$RUNNER_TEMP/frappe-bench.tar" frappe-bench
