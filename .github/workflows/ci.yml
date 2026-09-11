@@ -199,3 +199,2514 @@ jobs:
           bench --site test_site run-tests --app frappe_pg
         env:
           TYPE: server
+
+
+  prepare-upstream-frappe-v15:
+    runs-on: ubuntu-latest
+    name: Prepare upstream Frappe v15
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+          check-latest: true
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-upstream-prep-version-15-${{ hashFiles('**/*requirements.txt', '**/pyproject.toml', '**/setup.py', '**/setup.cfg') }}
+          restore-keys: |
+            ${{ runner.os }}-upstream-prep-version-15-
+            ${{ runner.os }}-upstream-
+            ${{ runner.os }}-pip-
+
+      - name: Prepare Frappe bench
+        run: |
+          pip install frappe-bench
+          bench init \
+            --frappe-branch "version-15" \
+            --skip-redis-config-generation \
+            --skip-assets \
+            --python "$(which python)" \
+            ~/frappe-bench
+          cd ~/frappe-bench
+          bench get-app frappe_pg "$GITHUB_WORKSPACE"
+          bench setup requirements --dev
+          bench setup requirements --node
+          CI=Yes bench build --force --production
+        env:
+          CI: 'Yes'
+
+      - name: Create reusable PostgreSQL Frappe fixture
+        working-directory: /home/runner/frappe-bench
+        env:
+          CI: 'Yes'
+          PGPASSWORD: root
+        run: |
+          bench set-config root_login postgres -g
+          bench set-config root_password root -g
+          bench set-config admin_password admin -g
+          bench set-config db_type postgres -g
+          bench new-site test_site \
+            --db-type postgres \
+            --db-host 127.0.0.1 \
+            --db-port 5432 \
+            --db-name test_frappe \
+            --db-password test_frappe \
+            --db-root-username postgres \
+            --db-root-password root \
+            --admin-password admin
+          # Preserve a neutral installed-Frappe database for downstream apps.
+          # Frappe's before_tests hook must run while Frappe is the only installed
+          # app; otherwise it intentionally skips setup_complete().
+          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/frappe_base.dump"
+          cd sites
+          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app frappe
+          cd ..
+          bench --site test_site install-app frappe_pg
+          bench --site test_site set-config allow_tests 1 --parse
+          bench --site test_site set-config server_script_enabled 1 --parse
+          bench --site test_site set-config host_name "http://test_site:8000"
+          bench --site test_site set-config auto_email_id "test@example.com"
+          bench --site test_site set-config mail_server localhost
+          bench --site test_site set-config mail_port 2525 --parse
+          bench --site test_site set-config mail_login "test@example.com"
+          bench --site test_site set-config mail_password test
+          bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
+          sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
+          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
+
+      - name: Pack prepared bench
+        run: tar -C /home/runner -cf "$RUNNER_TEMP/frappe-bench.tar" frappe-bench
+
+      - name: Upload prepared bench
+        uses: actions/upload-artifact@v4
+        with:
+          name: frappe-bench-v15
+          path: |
+            ${{ runner.temp }}/frappe-bench.tar
+            ${{ runner.temp }}/frappe_base.dump
+            ${{ runner.temp }}/test_frappe.dump
+          compression-level: 6
+          retention-days: 1
+
+  prepare-upstream-frappe-v16:
+    runs-on: ubuntu-latest
+    name: Prepare upstream Frappe v16
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.14'
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 24
+          check-latest: true
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-upstream-prep-version-16-${{ hashFiles('**/*requirements.txt', '**/pyproject.toml', '**/setup.py', '**/setup.cfg') }}
+          restore-keys: |
+            ${{ runner.os }}-upstream-prep-version-16-
+            ${{ runner.os }}-upstream-
+            ${{ runner.os }}-pip-
+
+      - name: Prepare Frappe bench
+        run: |
+          pip install frappe-bench
+          bench init \
+            --frappe-branch "version-16" \
+            --skip-redis-config-generation \
+            --skip-assets \
+            --python "$(which python)" \
+            ~/frappe-bench
+          cd ~/frappe-bench
+          bench get-app frappe_pg "$GITHUB_WORKSPACE"
+          bench setup requirements --dev
+          bench setup requirements --node
+          CI=Yes bench build --force --production
+        env:
+          CI: 'Yes'
+
+      - name: Create reusable PostgreSQL Frappe fixture
+        working-directory: /home/runner/frappe-bench
+        env:
+          CI: 'Yes'
+          PGPASSWORD: root
+        run: |
+          bench set-config root_login postgres -g
+          bench set-config root_password root -g
+          bench set-config admin_password admin -g
+          bench set-config db_type postgres -g
+          bench new-site test_site \
+            --db-type postgres \
+            --db-host 127.0.0.1 \
+            --db-port 5432 \
+            --db-name test_frappe \
+            --db-password test_frappe \
+            --db-root-username postgres \
+            --db-root-password root \
+            --admin-password admin
+          # Preserve a neutral installed-Frappe database for downstream apps.
+          # Frappe's before_tests hook must run while Frappe is the only installed
+          # app; otherwise it intentionally skips setup_complete().
+          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/frappe_base.dump"
+          cd sites
+          ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/prepare_app_test_fixture.py" --site test_site --app frappe
+          cd ..
+          bench --site test_site install-app frappe_pg
+          bench --site test_site set-config allow_tests 1 --parse
+          bench --site test_site set-config server_script_enabled 1 --parse
+          bench --site test_site set-config host_name "http://test_site:8000"
+          bench --site test_site set-config auto_email_id "test@example.com"
+          bench --site test_site set-config mail_server localhost
+          bench --site test_site set-config mail_port 2525 --parse
+          bench --site test_site set-config mail_login "test@example.com"
+          bench --site test_site set-config mail_password test
+          bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
+          sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
+          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
+
+      - name: Pack prepared bench
+        run: tar -C /home/runner -cf "$RUNNER_TEMP/frappe-bench.tar" frappe-bench
+
+      - name: Upload prepared bench
+        uses: actions/upload-artifact@v4
+        with:
+          name: frappe-bench-v16
+          path: |
+            ${{ runner.temp }}/frappe-bench.tar
+            ${{ runner.temp }}/frappe_base.dump
+            ${{ runner.temp }}/test_frappe.dump
+          compression-level: 6
+          retention-days: 1
+
+  prepare-upstream-erpnext-v15:
+    needs: prepare-upstream-frappe-v15
+    runs-on: ubuntu-latest
+    name: Prepare upstream ERPNext / version-15
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+          check-latest: true
+
+      - name: Download prepared Frappe bench
+        uses: actions/download-artifact@v4
+        with:
+          name: frappe-bench-v15
+          path: ${{ runner.temp }}/prepared-bench
+
+      - name: Restore prepared Frappe bench
+        run: |
+          tar -C /home/runner -xf "$RUNNER_TEMP/prepared-bench/frappe-bench.tar"
+          pip install frappe-bench
+
+      - name: Restore Frappe PostgreSQL database
+        working-directory: /home/runner/frappe-bench
+        env:
+          PGPASSWORD: root
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
+          CREATE DATABASE test_frappe OWNER test_frappe;
+          SQL
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/frappe_base.dump"
+          cd sites
+          ../env/bin/python - <<'PYVERIFY'
+          import frappe
+
+          frappe.init(site="test_site")
+          frappe.connect()
+          apps = frappe.get_installed_apps()
+          assert apps == ["frappe"], apps
+          print("Restored neutral Frappe fixture verified:", ", ".join(apps))
+          PYVERIFY
+          rm -f test_site/.test_records.jsonl test_site/.test_log
+          cd ..
+          bench --site test_site install-app frappe_pg
+      - name: Fetch application dependencies
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench get-app --branch version-15 payments https://github.com/frappe/payments.git
+          bench get-app --branch version-15 erpnext https://github.com/frappe/erpnext.git
+          bench setup requirements --dev payments erpnext
+
+      - name: Backport upstream PostgreSQL test fixture fix
+        working-directory: /home/runner/frappe-bench
+        run: |
+          python - <<'PYFIX'
+          from pathlib import Path
+          candidates = [
+              Path("apps/erpnext/erpnext/tests/utils.py"),
+              Path("apps/erpnext/erpnext/manufacturing/doctype/workstation/test_records.json"),
+          ]
+          old = '"warehouse": "_Test warehouse - _TC"'
+          new = '"warehouse": "_Test Warehouse - _TC"'
+          changed = 0
+          for path in candidates:
+              if path.exists() and old in path.read_text():
+                  path.write_text(path.read_text().replace(old, new, 1))
+                  changed += 1
+          if changed != 1:
+              raise SystemExit(f"expected exactly one ERPNext workstation fixture correction, changed {changed}")
+
+
+          # Inventory Dimension tests create Custom Fields (including Stock Ledger Entry
+          # columns) and expect MariaDB's implicit DDL commit semantics. PostgreSQL DDL
+          # is transactional, so commit immediately after the test helper inserts a
+          # dimension to keep metadata and physical columns in sync across test rollbacks.
+          inventory_test = Path("apps/erpnext/erpnext/stock/doctype/inventory_dimension/test_inventory_dimension.py")
+          inventory_source = inventory_test.read_text()
+          inventory_markers = [
+              "\t\tif not args.do_not_save:\n\t\t\tdoc.insert(ignore_permissions=True)\n",
+              "\tif not args.do_not_save:\n\t\tdoc.insert(ignore_permissions=True)\n",
+          ]
+          if "PostgreSQL: match MariaDB DDL implicit-commit test semantics" not in inventory_source:
+              for inventory_marker in inventory_markers:
+                  if inventory_marker in inventory_source:
+                      indent = inventory_marker.split("doc.insert", 1)[0].rsplit("\n", 1)[-1]
+                      inventory_replacement = inventory_marker + indent + "frappe.db.commit()  # PostgreSQL: match MariaDB DDL implicit-commit test semantics\n"
+                      inventory_test.write_text(inventory_source.replace(inventory_marker, inventory_replacement, 1))
+                      break
+              else:
+                  raise SystemExit("ERPNext inventory-dimension test helper marker not found")
+
+          # Accounting Dimension creation adds Custom Fields (DDL) and then the POS test
+          # deliberately triggers a validation rollback. MariaDB's implicit DDL commit
+          # preserves the dimension rows; PostgreSQL needs an explicit test-fixture commit.
+          accounting_dimension_test = Path("apps/erpnext/erpnext/accounts/doctype/accounting_dimension/test_accounting_dimension.py")
+          accounting_dimension_source = accounting_dimension_test.read_text()
+          accounting_marker = "\n\ndef disable_dimension():\n"
+          accounting_replacement = "\n\tfrappe.db.commit()  # PostgreSQL: preserve Accounting Dimension DDL test fixture state\n\n\ndef disable_dimension():\n"
+          if accounting_replacement not in accounting_dimension_source:
+              if accounting_marker not in accounting_dimension_source:
+                  raise SystemExit("ERPNext v15 Accounting Dimension setup marker not found")
+              accounting_dimension_test.write_text(
+                  accounting_dimension_source.replace(accounting_marker, accounting_replacement, 1)
+              )
+
+          # ERPNext v15 creates Supplier.pan once in setUpClass and then rolls
+          # back after each test. MariaDB's updatedb DDL implicitly commits the
+          # class setup; PostgreSQL DDL is transactional, so preserve the
+          # upstream MariaDB test state with an explicit commit at the same point.
+          tax_test = Path("apps/erpnext/erpnext/accounts/doctype/tax_withholding_category/test_tax_withholding_category.py")
+          source = tax_test.read_text()
+          marker = "\t\tmake_pan_no_field()\n"
+          replacement = marker + "\t\tfrappe.db.commit()  # PostgreSQL: match MariaDB DDL implicit-commit test semantics\n"
+          if replacement not in source:
+              if marker not in source:
+                  raise SystemExit("ERPNext v15 tax-withholding setup marker not found")
+              tax_test.write_text(source.replace(marker, replacement, 1))
+
+          # ERPNext develop made Purchase Invoice GL checks independent of DB
+          # collation. MariaDB/Postgres order account names with leading
+          # underscores differently, so match actual rows against the expected
+          # multiset instead of relying on positional ORDER BY account.
+          purchase_invoice_test = Path("apps/erpnext/erpnext/accounts/doctype/purchase_invoice/test_purchase_invoice.py")
+          source = purchase_invoice_test.read_text()
+          old = """\tgl_entries = query.run(as_dict=True)\n\n\tfor i, gle in enumerate(gl_entries):\n\t\tdoc.assertEqual(expected_gle[i][0], gle.account)\n\t\tdoc.assertEqual(expected_gle[i][1], gle.debit)\n\t\tdoc.assertEqual(expected_gle[i][2], gle.credit)\n\t\tdoc.assertEqual(getdate(expected_gle[i][3]), gle.posting_date)\n\n\t\tif additional_columns:\n\t\t\tj = 4\n\t\t\tfor col in additional_columns:\n\t\t\t\tdoc.assertEqual(expected_gle[i][j], gle[col])\n\t\t\t\tj += 1\n"""
+          new = """\tgl_entries = query.run(as_dict=True)\n\n\t# MariaDB and Postgres collate `account` differently, so DB row order isn't portable.\n\tcols = additional_columns or []\n\n\tdef _key(account, debit, credit, posting_date, extras):\n\t\treturn (account, flt(debit), flt(credit), getdate(posting_date), *(str(v) for v in extras))\n\n\tremaining = {}\n\tfor e in expected_gle:\n\t\tk = _key(e[0], e[1], e[2], e[3], e[4 : 4 + len(cols)])\n\t\tremaining[k] = remaining.get(k, 0) + 1\n\n\tfor gle in gl_entries:\n\t\tk = _key(gle.account, gle.debit, gle.credit, gle.posting_date, [gle[c] for c in cols])\n\t\tdoc.assertGreater(remaining.get(k, 0), 0, msg=f"Unexpected GL entry {k}; expected one of {list(remaining)}")\n\t\tremaining[k] -= 1\n"""
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("ERPNext v15 Purchase Invoice GL helper marker not found")
+              purchase_invoice_test.write_text(source.replace(old, new, 1))
+          PYFIX
+
+      - name: Backport v15 database-order-neutral assertions
+        working-directory: /home/runner/frappe-bench
+        run: |
+          python - <<'PYFIX'
+          from pathlib import Path
+
+          bank = Path("apps/erpnext/erpnext/accounts/doctype/bank_transaction/test_bank_transaction.py")
+          source = bank.read_text()
+          old = '        self.assertTrue(linked_payments[0]["party"] == "Conrad Electronic")'.replace("        ", "\t\t")
+          new = '        self.assertIn("Conrad Electronic", [payment["party"] for payment in linked_payments])'.replace("        ", "\t\t")
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("ERPNext v15 Bank Transaction ordering marker not found")
+              bank.write_text(source.replace(old, new, 1))
+
+          journal = Path("apps/erpnext/erpnext/accounts/doctype/journal_entry/test_journal_entry.py")
+          source = journal.read_text()
+          old = """\t\tgl_entries = query.run(as_dict=True)\n\n\t\tfor i in range(len(self.expected_gle)):\n\t\t\tfor field in self.fields:\n\t\t\t\tself.assertEqual(self.expected_gle[i][field], gl_entries[i][field])\n"""
+          new = """\t\tgl_entries = query.run(as_dict=True)\n\n\t\t# MariaDB and Postgres collate `account` differently, so the DB ordering isn't portable;\n\t\t# sort both sides identically before the positional comparison.\n\t\tdef _key(row):\n\t\t\treturn tuple(str(row[f]) for f in self.fields)\n\n\t\tgl_entries = sorted(gl_entries, key=_key)\n\t\texpected_gle = sorted(self.expected_gle, key=_key)\n\t\tfor i in range(len(expected_gle)):\n\t\t\tfor field in self.fields:\n\t\t\t\tself.assertEqual(expected_gle[i][field], gl_entries[i][field])\n"""
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("ERPNext v15 Journal Entry GL marker not found")
+              journal.write_text(source.replace(old, new, 1))
+
+          asset = Path("apps/erpnext/erpnext/assets/doctype/asset/test_asset.py")
+          source = asset.read_text()
+          if 'frappe.get_doc("Item", "Macbook Pro")' not in source and 'frappe.get_doc("Item", "MacBook Pro")' in source:
+              source = source.replace('frappe.get_doc("Item", "MacBook Pro")', 'frappe.get_doc("Item", "Macbook Pro")')
+          start = source.index("\tdef test_cwip_accounting(")
+          end = source.find("\n\tdef ", start + 1)
+          block = source[start:] if end < 0 else source[start:end]
+          for old_assert, new_assert in [
+              ("\t\tself.assertSequenceEqual(pr_gle, expected_gle)\n", "\t\tself.assertCountEqual(pr_gle, expected_gle)\n"),
+              ("\t\tself.assertSequenceEqual(pi_gle, expected_gle)\n", "\t\tself.assertCountEqual(pi_gle, expected_gle)\n"),
+              ("\t\tself.assertSequenceEqual(gle, expected_gle)\n", "\t\tself.assertCountEqual(gle, expected_gle)\n"),
+          ]:
+              if new_assert not in block:
+                  if old_assert not in block:
+                      raise SystemExit(f"ERPNext v15 Asset CWIP assertion marker missing: {old_assert.strip()}")
+                  block = block.replace(old_assert, new_assert, 1)
+          source = source[:start] + block + ("" if end < 0 else source[end:])
+          asset.write_text(source)
+          PYFIX
+
+      - name: Expose v15 Period Closing Voucher test failures
+        working-directory: /home/runner/frappe-bench
+        run: |
+          python3 - <<'PYFIX'
+          from pathlib import Path
+          path = Path("apps/erpnext/erpnext/accounts/doctype/period_closing_voucher/period_closing_voucher.py")
+          source = path.read_text()
+          old = "\texcept Exception as e:\n\t\tfrappe.db.rollback()\n\t\tfrappe.log_error(title=_(\"Period Closing Voucher {0} GL Entry Processing Failed\").format(doc.name))\n"
+          new = "\texcept Exception as e:\n\t\tif frappe.flags.in_test:\n\t\t\traise\n\t\tfrappe.db.rollback()\n\t\tfrappe.log_error(title=_(\"Period Closing Voucher {0} GL Entry Processing Failed\").format(doc.name))\n"
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("ERPNext v15 PCV diagnostic marker not found")
+              path.write_text(source.replace(old, new, 1))
+          PYFIX
+
+      - name: Create reusable PostgreSQL ERPNext fixture
+        working-directory: /home/runner/frappe-bench
+        env:
+          CI: 'Yes'
+          PGPASSWORD: root
+        run: |
+          bench --site test_site install-app payments
+          bench --site test_site install-app erpnext
+          bench --site test_site set-config allow_tests 1 --parse
+          bench --site test_site set-config server_script_enabled 1 --parse
+          bench --site test_site set-config host_name "http://test_site:8000"
+          bench --site test_site set-config auto_email_id "test@example.com"
+          bench --site test_site set-config mail_server localhost
+          bench --site test_site set-config mail_port 2525 --parse
+          bench --site test_site set-config mail_login "test@example.com"
+          bench --site test_site set-config mail_password test
+          bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
+          # Match upstream CI: snapshot ERPNext immediately after app installation.
+          # Each shard runs the app's native before_tests/global dependencies (or
+          # v16 bootstrap imports) in its own fresh process. Keep the filesystem
+          # test-record journal consistent with this installed-only database.
+          rm -f sites/test_site/.test_records.jsonl sites/test_site/.test_log
+          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/erpnext_base.dump"
+          sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
+          cp "$RUNNER_TEMP/erpnext_base.dump" "$RUNNER_TEMP/test_frappe.dump"
+
+      - name: Pack reusable ERPNext fixture
+        run: tar -C /home/runner -cf "$RUNNER_TEMP/frappe-bench.tar" frappe-bench
+
+      - name: Upload reusable ERPNext fixture
+        uses: actions/upload-artifact@v4
+        with:
+          name: erpnext-bench-v15
+          path: |
+            ${{ runner.temp }}/frappe-bench.tar
+            ${{ runner.temp }}/erpnext_base.dump
+            ${{ runner.temp }}/test_frappe.dump
+          compression-level: 6
+          retention-days: 1
+
+  prepare-upstream-erpnext-v16:
+    needs: prepare-upstream-frappe-v16
+    runs-on: ubuntu-latest
+    name: Prepare upstream ERPNext / version-16
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.14'
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 24
+          check-latest: true
+
+      - name: Download prepared Frappe bench
+        uses: actions/download-artifact@v4
+        with:
+          name: frappe-bench-v16
+          path: ${{ runner.temp }}/prepared-bench
+
+      - name: Restore prepared Frappe bench
+        run: |
+          tar -C /home/runner -xf "$RUNNER_TEMP/prepared-bench/frappe-bench.tar"
+          pip install frappe-bench
+
+      - name: Restore Frappe PostgreSQL database
+        working-directory: /home/runner/frappe-bench
+        env:
+          PGPASSWORD: root
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
+          CREATE DATABASE test_frappe OWNER test_frappe;
+          SQL
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/frappe_base.dump"
+          cd sites
+          ../env/bin/python - <<'PYVERIFY'
+          import frappe
+
+          frappe.init(site="test_site")
+          frappe.connect()
+          apps = frappe.get_installed_apps()
+          assert apps == ["frappe"], apps
+          print("Restored neutral Frappe fixture verified:", ", ".join(apps))
+          PYVERIFY
+          rm -f test_site/.test_records.jsonl test_site/.test_log
+          cd ..
+          bench --site test_site install-app frappe_pg
+      - name: Fetch application dependencies
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench get-app --branch develop payments https://github.com/frappe/payments.git
+          bench get-app --branch version-16 erpnext https://github.com/frappe/erpnext.git
+          bench setup requirements --dev payments erpnext
+
+      - name: Backport upstream PostgreSQL test fixture fix
+        working-directory: /home/runner/frappe-bench
+        run: |
+          python - <<'PYFIX'
+          from pathlib import Path
+          candidates = [
+              Path("apps/erpnext/erpnext/tests/utils.py"),
+              Path("apps/erpnext/erpnext/manufacturing/doctype/workstation/test_records.json"),
+          ]
+          old = '"warehouse": "_Test warehouse - _TC"'
+          new = '"warehouse": "_Test Warehouse - _TC"'
+          changed = 0
+          for path in candidates:
+              if path.exists() and old in path.read_text():
+                  path.write_text(path.read_text().replace(old, new, 1))
+                  changed += 1
+          if changed != 1:
+              raise SystemExit(f"expected exactly one ERPNext workstation fixture correction, changed {changed}")
+
+
+          # Inventory Dimension tests create Custom Fields (including Stock Ledger Entry
+          # columns) and expect MariaDB's implicit DDL commit semantics. PostgreSQL DDL
+          # is transactional, so commit immediately after the test helper inserts a
+          # dimension to keep metadata and physical columns in sync across test rollbacks.
+          inventory_test = Path("apps/erpnext/erpnext/stock/doctype/inventory_dimension/test_inventory_dimension.py")
+          inventory_source = inventory_test.read_text()
+          inventory_markers = [
+              "\t\tif not args.do_not_save:\n\t\t\tdoc.insert(ignore_permissions=True)\n",
+              "\tif not args.do_not_save:\n\t\tdoc.insert(ignore_permissions=True)\n",
+          ]
+          if "PostgreSQL: match MariaDB DDL implicit-commit test semantics" not in inventory_source:
+              for inventory_marker in inventory_markers:
+                  if inventory_marker in inventory_source:
+                      indent = inventory_marker.split("doc.insert", 1)[0].rsplit("\n", 1)[-1]
+                      inventory_replacement = inventory_marker + indent + "frappe.db.commit()  # PostgreSQL: match MariaDB DDL implicit-commit test semantics\n"
+                      inventory_test.write_text(inventory_source.replace(inventory_marker, inventory_replacement, 1))
+                      break
+              else:
+                  raise SystemExit("ERPNext inventory-dimension test helper marker not found")
+          # ERPNext develop fixed Journal Entry GL assertions that depended on
+          # database collation order. MariaDB and PostgreSQL sort leading
+          # underscores differently, so compare the same rows after a portable
+          # Python sort instead of relying on ORDER BY account.
+          journal_test = Path("apps/erpnext/erpnext/accounts/doctype/journal_entry/test_journal_entry.py")
+          journal_source = journal_test.read_text()
+          old_check = """\t\tgl_entries = query.run(as_dict=True)\n\n\t\tfor i in range(len(self.expected_gle)):\n\t\t\tfor field in self.fields:\n\t\t\t\tself.assertEqual(self.expected_gle[i][field], gl_entries[i][field])\n"""
+          new_check = """\t\tgl_entries = query.run(as_dict=True)\n\n\t\t# MariaDB and Postgres collate `account` differently, so the DB ordering isn't portable;\n\t\t# sort both sides identically before the positional comparison.\n\t\tdef _key(row):\n\t\t\treturn tuple(str(row[f]) for f in self.fields)\n\n\t\tgl_entries = sorted(gl_entries, key=_key)\n\t\texpected_gle = sorted(self.expected_gle, key=_key)\n\t\tfor i in range(len(expected_gle)):\n\t\t\tfor field in self.fields:\n\t\t\t\tself.assertEqual(expected_gle[i][field], gl_entries[i][field])\n"""
+          if new_check not in journal_source:
+              if old_check not in journal_source:
+                  raise SystemExit("ERPNext v16 Journal Entry GL comparison marker not found")
+              journal_test.write_text(journal_source.replace(old_check, new_check, 1))
+
+          asset_test = Path("apps/erpnext/erpnext/assets/doctype/asset/test_asset.py")
+          asset_source = asset_test.read_text()
+          old_case = 'item = frappe.get_doc("Item", "MacBook Pro")'
+          new_case = 'item = frappe.get_doc("Item", "Macbook Pro")'
+          if new_case not in asset_source:
+              if old_case not in asset_source:
+                  raise SystemExit("ERPNext v16 Asset item-case marker not found")
+              asset_source = asset_source.replace(old_case, new_case, 1)
+          def patch_asset_function(source, function_name, replacements):
+              start = source.index(f"\tdef {function_name}(")
+              next_method = source.find("\n\tdef ", start + 1)
+              end = len(source) if next_method < 0 else next_method
+              block = source[start:end]
+              for old_assert, new_assert in replacements:
+                  if old_assert not in block:
+                      raise SystemExit(f"ERPNext v16 Asset assertion marker not found in {function_name}: {old_assert.strip()}")
+                  block = block.replace(old_assert, new_assert, 1)
+              return source[:start] + block + source[end:]
+
+          asset_source = patch_asset_function(
+              asset_source,
+              "test_gle_made_by_asset_sale",
+              [("\t\tself.assertSequenceEqual(gle, expected_gle)\n", "\t\tself.assertCountEqual(gle, expected_gle)\n")],
+          )
+          asset_source = patch_asset_function(
+              asset_source,
+              "test_gle_made_by_asset_sale_for_existing_asset",
+              [("\t\tself.assertSequenceEqual(gle, expected_gle)\n", "\t\tself.assertCountEqual(gle, expected_gle)\n")],
+          )
+          asset_source = patch_asset_function(
+              asset_source,
+              "test_cwip_accounting",
+              [
+                  ("\t\tself.assertSequenceEqual(pr_gle, expected_gle)\n", "\t\tself.assertCountEqual(pr_gle, expected_gle)\n"),
+                  ("\t\tself.assertSequenceEqual(pi_gle, expected_gle)\n", "\t\tself.assertCountEqual(pi_gle, expected_gle)\n"),
+                  ("\t\tself.assertSequenceEqual(gle, expected_gle)\n", "\t\tself.assertCountEqual(gle, expected_gle)\n"),
+              ],
+          )
+          asset_test.write_text(asset_source)
+
+          sales_invoice_test = Path("apps/erpnext/erpnext/accounts/doctype/sales_invoice/test_sales_invoice.py")
+          sales_invoice_source = sales_invoice_test.read_text()
+          old_gl_check = "\tdoc.assertGreater(len(gl_entries), 0)\n\n\tfor i, gle in enumerate(gl_entries):\n"
+          new_gl_check = "\tdoc.assertGreater(len(gl_entries), 0)\n\n\t# MariaDB and Postgres collate account names differently; sort by the compared values.\n\tgl_entries = sorted(gl_entries, key=lambda g: (g.account, g.debit, g.credit))\n\texpected_gle = sorted(expected_gle, key=lambda e: (e[0], e[1], e[2]))\n\n\tfor i, gle in enumerate(gl_entries):\n"
+          if new_gl_check not in sales_invoice_source:
+              if old_gl_check not in sales_invoice_source:
+                  raise SystemExit("ERPNext v16 Sales Invoice GL ordering marker not found")
+              sales_invoice_source = sales_invoice_source.replace(old_gl_check, new_gl_check, 1)
+          old_rounding = "\t\tself.assertEqual(debit_credit_diff, 0)\n"
+          new_rounding = "\t\t# PostgreSQL DECIMAL values reach this test as floats, so allow tiny FP residue.\n\t\tself.assertAlmostEqual(debit_credit_diff, 0)\n"
+          if new_rounding not in sales_invoice_source:
+              if old_rounding not in sales_invoice_source:
+                  raise SystemExit("ERPNext v16 Sales Invoice rounding marker not found")
+              sales_invoice_source = sales_invoice_source.replace(old_rounding, new_rounding, 1)
+          sales_invoice_test.write_text(sales_invoice_source)
+          PYFIX
+
+      - name: Backport v16 remaining database-order-neutral assertions
+        working-directory: /home/runner/frappe-bench
+        run: |
+          python - <<'PYFIX'
+          from pathlib import Path
+
+          sales = Path("apps/erpnext/erpnext/accounts/doctype/sales_invoice/test_sales_invoice.py")
+          source = sales.read_text()
+          old_variants = (
+              "\t\tself.assertEqual(len(actual), 4)\n\t\tself.assertEqual(actual, expected)\n",
+              "\t\tself.assertEqual(len(actual), 4)\n\t\tself.assertEqual(expected, actual)\n",
+          )
+          new = "\t\tself.assertEqual(len(actual), 4)\n\t\t# DB account collation isn't portable across MariaDB/Postgres; compare order-independently.\n\t\tself.assertCountEqual(actual, expected)\n"
+          if new not in source:
+              for old in old_variants:
+                  if old in source:
+                      sales.write_text(source.replace(old, new, 1))
+                      break
+              else:
+                  raise SystemExit("ERPNext v16 opening invoice GL ordering marker not found")
+
+          payment = Path("apps/erpnext/erpnext/accounts/doctype/payment_entry/test_payment_entry.py")
+          source = payment.read_text()
+          old = """\t\tfor row in range(len(self.expected_gle)):\n\t\t\tfor field in ["account", "debit", "credit"]:\n\t\t\t\tself.assertEqual(self.expected_gle[row][field], gl_entries[row][field])\n"""
+          new = """\t\t# MariaDB and Postgres collate `account` differently, so the DB ordering isn't portable;\n\t\t# sort both sides identically before the positional comparison.\n\t\tfields = ["account", "debit", "credit"]\n\n\t\tdef _key(row):\n\t\t\treturn tuple(str(row[f]) for f in fields)\n\n\t\tgl_entries = sorted(gl_entries, key=_key)\n\t\texpected_gle = sorted(self.expected_gle, key=_key)\n\t\tfor row in range(len(expected_gle)):\n\t\t\tfor field in fields:\n\t\t\t\tself.assertEqual(expected_gle[row][field], gl_entries[row][field])\n"""
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("ERPNext v16 Payment Entry GL ordering marker not found")
+              payment.write_text(source.replace(old, new, 1))
+          PYFIX
+
+      - name: Instrument ERPNext v16 install timing
+        working-directory: /home/runner/frappe-bench
+        run: python "$GITHUB_WORKSPACE/.github/scripts/instrument_erpnext_install.py"
+
+      - name: Create reusable PostgreSQL ERPNext fixture
+        working-directory: /home/runner/frappe-bench
+        env:
+          CI: 'Yes'
+          PGPASSWORD: root
+        run: |
+          bench --site test_site install-app payments
+          bench --site test_site install-app erpnext
+          bench --site test_site set-config allow_tests 1 --parse
+          bench --site test_site set-config server_script_enabled 1 --parse
+          bench --site test_site set-config host_name "http://test_site:8000"
+          bench --site test_site set-config auto_email_id "test@example.com"
+          bench --site test_site set-config mail_server localhost
+          bench --site test_site set-config mail_port 2525 --parse
+          bench --site test_site set-config mail_login "test@example.com"
+          bench --site test_site set-config mail_password test
+          bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
+          # Match upstream CI: snapshot ERPNext immediately after app installation.
+          # Each shard runs the app's native before_tests/global dependencies (or
+          # v16 bootstrap imports) in its own fresh process. Keep the filesystem
+          # test-record journal consistent with this installed-only database.
+          rm -f sites/test_site/.test_records.jsonl sites/test_site/.test_log
+          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/erpnext_base.dump"
+          sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
+          cp "$RUNNER_TEMP/erpnext_base.dump" "$RUNNER_TEMP/test_frappe.dump"
+
+      - name: Pack reusable ERPNext fixture
+        run: tar -C /home/runner -cf "$RUNNER_TEMP/frappe-bench.tar" frappe-bench
+
+      - name: Upload reusable ERPNext fixture
+        uses: actions/upload-artifact@v4
+        with:
+          name: erpnext-bench-v16
+          path: |
+            ${{ runner.temp }}/frappe-bench.tar
+            ${{ runner.temp }}/erpnext_base.dump
+            ${{ runner.temp }}/test_frappe.dump
+          compression-level: 6
+          retention-days: 1
+
+  prepare-upstream-hrms-v15:
+    needs: prepare-upstream-erpnext-v15
+    runs-on: ubuntu-latest
+    name: Prepare upstream HRMS / version-15
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+          check-latest: true
+      - name: Download reusable ERPNext fixture
+        uses: actions/download-artifact@v4
+        with:
+          name: erpnext-bench-v15
+          path: ${{ runner.temp }}/prepared-bench
+      - name: Restore reusable ERPNext fixture
+        run: |
+          tar -C /home/runner -xf "$RUNNER_TEMP/prepared-bench/frappe-bench.tar"
+          pip install frappe-bench
+      - name: Restore ERPNext PostgreSQL database
+        env:
+          PGPASSWORD: root
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
+          CREATE DATABASE test_frappe OWNER test_frappe;
+          SQL
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/erpnext_base.dump"
+          rm -f /home/runner/frappe-bench/sites/test_site/.test_records.jsonl /home/runner/frappe-bench/sites/test_site/.test_log
+          cd /home/runner/frappe-bench/sites
+          ../env/bin/python - <<'PYBASE'
+          import frappe
+          frappe.init(site="test_site")
+          frappe.connect()
+          print("HRMS base default company before HRMS test setup:", frappe.db.get_single_value("Global Defaults", "default_company"))
+          print("HRMS base companies:", frappe.get_all("Company", pluck="name"))
+          PYBASE
+      - name: Add HRMS to reusable fixture
+        working-directory: /home/runner/frappe-bench
+        env:
+          CI: 'Yes'
+          PGPASSWORD: root
+        run: |
+          bench get-app --branch "version-15" hrms https://github.com/frappe/hrms.git
+          bench setup requirements --dev hrms
+          # Backport HRMS v15 PostgreSQL-portable test expectations already present
+          # Backport HRMS v15 PostgreSQL-portable test expectations
+          # in current HRMS tests where the v15 branch carries stale assumptions.
+          python - <<'PYFIX'
+          from pathlib import Path
+
+          salary_component = Path("apps/hrms/hrms/payroll/doctype/salary_component/test_salary_component.py")
+          source = salary_component.read_text()
+          old_formula = '\t\tsalary_component.update_salary_structures("formula", "BS*.3")\n'
+          new_formula = (
+              '\t\tsalary_component.amount_based_on_formula = True\n'
+              '\t\tsalary_component.update_salary_structures("formula", "BS*.3")\n'
+          )
+          if new_formula not in source:
+              if old_formula not in source:
+                  raise SystemExit("HRMS v15 Salary Component formula marker not found")
+              salary_component.write_text(source.replace(old_formula, new_formula, 1))
+
+          payroll = Path("apps/hrms/hrms/payroll/doctype/payroll_entry/test_payroll_entry.py")
+          source = payroll.read_text()
+          old_je = "\t\tself.assertEqual(je_entries, expected_je)\n"
+          new_je = "\t\tself.assertEqual(sorted(je_entries), sorted(expected_je))\n"
+          if new_je not in source:
+              if old_je not in source:
+                  raise SystemExit("HRMS v15 payroll JE ordering marker not found")
+              source = source.replace(old_je, new_je, 1)
+          old_debit = "\t\tself.assertEqual(debit_entries, expected_entries)\n"
+          new_debit = "\t\tkey = lambda row: tuple(str(row.get(field)) for field in (\"party\", \"account\", \"cost_center\", \"debit\", \"credit\"))\n\t\tself.assertEqual(sorted(debit_entries, key=key), sorted(expected_entries, key=key))\n"
+          if new_debit not in source:
+              if old_debit not in source:
+                  raise SystemExit("HRMS v15 payroll bank-entry ordering marker not found")
+              source = source.replace(old_debit, new_debit, 1)
+          payroll.write_text(source)
+
+          roster = Path("apps/hrms/hrms/tests/test_roster.py")
+          source = roster.read_text()
+          old_filter = '\t\t\t\t"docstatus": ["!=", 2],\n'
+          new_filter = '\t\t\t\t"docstatus": 1,\n'
+          if new_filter not in source:
+              if old_filter not in source:
+                  raise SystemExit("HRMS v15 roster docstatus assertion marker not found")
+              source = source.replace(old_filter, new_filter, 1)
+          old_assert = "\t\tself.assertTrue(new_assignment)\n"
+          new_assert = "\t\trows = frappe.get_all(\"Shift Assignment\", filters={\"employee\": employee.name}, fields=[\"name\", \"start_date\", \"end_date\", \"docstatus\", \"status\", \"shift_type\"])\n\t\tself.assertTrue(new_assignment, rows)\n"
+          if new_assert not in source:
+              if old_assert not in source:
+                  raise SystemExit("HRMS v15 roster diagnostic assertion marker not found")
+              source = source.replace(old_assert, new_assert, 1)
+          roster.write_text(source)
+          PYFIX
+          bench --site test_site install-app hrms
+          # Match upstream CI: snapshot installed HRMS before app-global test setup.
+          # Each fresh shard runs HRMS before_tests and its file dependencies once.
+          rm -f sites/test_site/.test_records.jsonl sites/test_site/.test_log
+          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
+      - name: Pack reusable HRMS fixture
+        run: tar -C /home/runner -cf "$RUNNER_TEMP/frappe-bench.tar" frappe-bench
+      - name: Upload reusable HRMS fixture
+        uses: actions/upload-artifact@v4
+        with:
+          name: hrms-bench-v15
+          path: |
+            ${{ runner.temp }}/frappe-bench.tar
+            ${{ runner.temp }}/test_frappe.dump
+          compression-level: 6
+          retention-days: 1
+
+  prepare-upstream-hrms-v16:
+    needs: prepare-upstream-erpnext-v16
+    runs-on: ubuntu-latest
+    name: Prepare upstream HRMS / version-16
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.14'
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 24
+          check-latest: true
+      - name: Download reusable ERPNext fixture
+        uses: actions/download-artifact@v4
+        with:
+          name: erpnext-bench-v16
+          path: ${{ runner.temp }}/prepared-bench
+      - name: Restore reusable ERPNext fixture
+        run: |
+          tar -C /home/runner -xf "$RUNNER_TEMP/prepared-bench/frappe-bench.tar"
+          pip install frappe-bench
+      - name: Restore ERPNext PostgreSQL database
+        env:
+          PGPASSWORD: root
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
+          CREATE DATABASE test_frappe OWNER test_frappe;
+          SQL
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe --dbname test_frappe --no-owner --no-privileges "$RUNNER_TEMP/prepared-bench/erpnext_base.dump"
+          rm -f /home/runner/frappe-bench/sites/test_site/.test_records.jsonl /home/runner/frappe-bench/sites/test_site/.test_log
+          cd /home/runner/frappe-bench/sites
+          ../env/bin/python - <<'PYBASE'
+          import frappe
+          frappe.init(site="test_site")
+          frappe.connect()
+          print("HRMS base default company before HRMS test setup:", frappe.db.get_single_value("Global Defaults", "default_company"))
+          print("HRMS base companies:", frappe.get_all("Company", pluck="name"))
+          PYBASE
+      - name: Add HRMS to reusable fixture
+        working-directory: /home/runner/frappe-bench
+        env:
+          CI: 'Yes'
+          PGPASSWORD: root
+        run: |
+          bench get-app --branch "version-16" hrms https://github.com/frappe/hrms.git
+          bench setup requirements --dev hrms
+          python - <<'PYFIX'
+          from pathlib import Path
+
+          # HRMS tests compare rows returned without a portable ordering contract.
+          # MariaDB and PostgreSQL collate generated names differently, so assert
+          # the same business values by identity / after a deterministic Python sort.
+          bssa = Path("apps/hrms/hrms/payroll/doctype/bulk_salary_structure_assignment/test_bulk_salary_structure_assignment.py")
+          source = bssa.read_text()
+          old = "\t\t# employee grade default base pay fetched\n\t\tself.assertEqual(employees[0].base, self.grade.default_base_pay)\n\t\t# no employee grade\n\t\tself.assertEqual(employees[1].base, 0)\n"
+          new = "\t\temployees_by_id = {row.employee: row for row in employees}\n\t\t# employee grade default base pay fetched\n\t\tself.assertEqual(employees_by_id[self.emp1].base, self.grade.default_base_pay)\n\t\t# no employee grade\n\t\tself.assertEqual(employees_by_id[self.emp3].base, 0)\n"
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("HRMS BSSA ordering assertion marker not found")
+              bssa.write_text(source.replace(old, new, 1))
+
+          payroll = Path("apps/hrms/hrms/payroll/doctype/payroll_entry/test_payroll_entry.py")
+          source = payroll.read_text()
+          old = "\t\tself.assertEqual(je_entries, expected_je)\n"
+          new = "\t\tself.assertEqual(sorted(je_entries), sorted(expected_je))\n"
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("HRMS payroll JE ordering assertion marker not found")
+              source = source.replace(old, new, 1)
+          old = "\t\tself.assertEqual(debit_entries, expected_entries)\n"
+          new = "\t\tkey = lambda row: tuple(str(row.get(field)) for field in (\"party\", \"account\", \"cost_center\", \"debit\", \"credit\"))\n\t\tself.assertEqual(sorted(debit_entries, key=key), sorted(expected_entries, key=key))\n"
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("HRMS payroll bank-entry ordering assertion marker not found")
+              source = source.replace(old, new, 1)
+          payroll.write_text(source)
+
+          ctc = Path("apps/hrms/hrms/payroll/report/employee_ctc_break_up/test_employee_ctc_breakup.py")
+          source = ctc.read_text()
+          old = "\t\t\tself.assertEqual(ctc_breakup.format_currency(ctc_breakup.ctc), data[\"annual_ctc\"])\n"
+          new = "\t\t\tself.assertEqual(ctc_breakup.format_currency(ctc_breakup.ctc), fmt_money(data[\"ctc\"], precision=2, currency=data[\"currency\"]))\n"
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("HRMS CTC currency-format assertion marker not found")
+              if "from frappe.utils import fmt_money" not in source:
+                  source = source.replace("from frappe.utils import", "from frappe.utils import fmt_money,", 1)
+              ctc.write_text(source.replace(old, new, 1))
+
+          roster = Path("apps/hrms/hrms/tests/test_roster.py")
+          source = roster.read_text()
+          old_filter = '\t\t\t\t"docstatus": ["!=", 2],\n'
+          new_filter = '\t\t\t\t"docstatus": 1,\n'
+          if new_filter not in source:
+              if old_filter not in source:
+                  raise SystemExit("HRMS v16 roster docstatus assertion marker not found")
+              source = source.replace(old_filter, new_filter, 1)
+          old = "\t\tself.assertTrue(new_assignment)\n"
+          new = "\t\trows = frappe.get_all(\"Shift Assignment\", filters={\"employee\": employee.name}, fields=[\"name\", \"start_date\", \"end_date\", \"docstatus\", \"status\", \"shift_type\"])\n\t\tself.assertTrue(new_assignment, rows)\n"
+          if new not in source:
+              if old not in source:
+                  raise SystemExit("HRMS roster diagnostic assertion marker not found")
+              source = source.replace(old, new, 1)
+          roster.write_text(source)
+          PYFIX
+          bench --site test_site install-app hrms
+          # Match upstream CI: snapshot installed HRMS before app-global test setup.
+          # Each fresh shard runs HRMS before_tests and its file dependencies once.
+          rm -f sites/test_site/.test_records.jsonl sites/test_site/.test_log
+          pg_dump -h 127.0.0.1 -U postgres -Fc --no-owner --no-acl test_frappe > "$RUNNER_TEMP/test_frappe.dump"
+      - name: Pack reusable HRMS fixture
+        run: tar -C /home/runner -cf "$RUNNER_TEMP/frappe-bench.tar" frappe-bench
+      - name: Upload reusable HRMS fixture
+        uses: actions/upload-artifact@v4
+        with:
+          name: hrms-bench-v16
+          path: |
+            ${{ runner.temp }}/frappe-bench.tar
+            ${{ runner.temp }}/test_frappe.dump
+          compression-level: 6
+          retention-days: 1
+
+  upstream-frappe-postgres-tests-v15:
+    needs: prepare-upstream-frappe-v15
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / remainder 1
+            python: '3.10'
+            node: 18
+            artifact: frappe-bench-v15
+            test_group: remainder-1
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / remainder 2
+            python: '3.10'
+            node: 18
+            artifact: frappe-bench-v15
+            test_group: remainder-2
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / webhook
+            python: '3.10'
+            node: 18
+            artifact: frappe-bench-v15
+            test_group: webhook
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / rq
+            python: '3.10'
+            node: 18
+            artifact: frappe-bench-v15
+            test_group: rq
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / permissions
+            python: '3.10'
+            node: 18
+            artifact: frappe-bench-v15
+            test_group: permissions
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / db query
+            python: '3.10'
+            node: 18
+            artifact: frappe-bench-v15
+            test_group: db-query
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / auth
+            python: '3.10'
+            node: 18
+            artifact: frappe-bench-v15
+            test_group: auth
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / boot
+            python: '3.10'
+            node: 18
+            artifact: frappe-bench-v15
+            test_group: boot
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / fixture import
+            python: '3.10'
+            node: 18
+            artifact: frappe-bench-v15
+            test_group: fixture-import
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / email account
+            python: '3.10'
+            node: 18
+            artifact: frappe-bench-v15
+            test_group: email-account
+          - frappe: version-15
+            app: frappe
+            label: Frappe v15 / commands
+            python: '3.10'
+            node: 18
+            artifact: frappe-bench-v15
+            test_group: commands
+    name: PostgreSQL upstream / ${{ matrix.label }}
+
+    services:
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+      smtp-server:
+        image: rnwood/smtp4dev:3.7.1
+        ports:
+          - 2525:25
+          - 3000:80
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: true
+
+      - name: Install test system dependencies
+        if: matrix.test_group == 'remainder-1' || matrix.test_group == 'remainder-2' || matrix.test_group == 'email-account'
+        run: |
+          wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y /tmp/wkhtmltox.deb
+
+      - name: Download prepared Frappe bench
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/prepared-bench
+
+      - name: Restore prepared Frappe bench
+        run: |
+          tar -C /home/runner -xf "$RUNNER_TEMP/prepared-bench/frappe-bench.tar"
+          pip install frappe-bench
+
+      - name: Restore reusable PostgreSQL Frappe fixture
+        env:
+          PGPASSWORD: root
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
+          CREATE DATABASE test_frappe OWNER test_frappe;
+          SQL
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe \
+            --dbname test_frappe \
+            --no-owner \
+            --no-privileges \
+            "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
+
+      - name: Start Frappe services
+        working-directory: /home/runner/frappe-bench
+        run: |
+          echo "127.0.0.1 test_site" | sudo tee -a /etc/hosts
+          bench start > "$GITHUB_WORKSPACE/bench_start.log" 2>&1 &
+
+          for _ in {1..30}; do
+            if curl --fail --silent --output /dev/null http://test_site:8000; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          cat "$GITHUB_WORKSPACE/bench_start.log"
+          exit 1
+
+      - name: Run upstream application tests
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench --site test_site set-config allow_tests true
+          if [[ "${{ matrix.app }}" == "frappe" ]]; then
+            cd sites
+            status=0
+            ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_frappe_test_group.py" \
+              --site test_site \
+              --group "${{ matrix.test_group }}" || status=$?
+
+            exit "$status"
+          else
+            cd sites
+            status=0
+            ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_app_test_group.py" \
+              --site test_site \
+              --app "${{ matrix.app }}" \
+              --group "${{ matrix.test_group }}" || status=$?
+
+            exit "$status"
+          fi
+        env:
+          TYPE: server
+          FRAPPE_BENCH_ROOT: /home/runner/frappe-bench
+
+  upstream-frappe-postgres-tests-v16:
+    needs: prepare-upstream-frappe-v16
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / remainder 1
+            python: '3.14'
+            node: 24
+            artifact: frappe-bench-v16
+            test_group: remainder-1
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / remainder 2
+            python: '3.14'
+            node: 24
+            artifact: frappe-bench-v16
+            test_group: remainder-2
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / webhook
+            python: '3.14'
+            node: 24
+            artifact: frappe-bench-v16
+            test_group: webhook
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / rq
+            python: '3.14'
+            node: 24
+            artifact: frappe-bench-v16
+            test_group: rq
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / permissions
+            python: '3.14'
+            node: 24
+            artifact: frappe-bench-v16
+            test_group: permissions
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / db query
+            python: '3.14'
+            node: 24
+            artifact: frappe-bench-v16
+            test_group: db-query
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / auth
+            python: '3.14'
+            node: 24
+            artifact: frappe-bench-v16
+            test_group: auth
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / boot
+            python: '3.14'
+            node: 24
+            artifact: frappe-bench-v16
+            test_group: boot
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / fixture import
+            python: '3.14'
+            node: 24
+            artifact: frappe-bench-v16
+            test_group: fixture-import
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / email account
+            python: '3.14'
+            node: 24
+            artifact: frappe-bench-v16
+            test_group: email-account
+          - frappe: version-16
+            app: frappe
+            label: Frappe v16 / commands
+            python: '3.14'
+            node: 24
+            artifact: frappe-bench-v16
+            test_group: commands
+    name: PostgreSQL upstream / ${{ matrix.label }}
+
+    services:
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+      smtp-server:
+        image: rnwood/smtp4dev:3.7.1
+        ports:
+          - 2525:25
+          - 3000:80
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: true
+
+      - name: Install test system dependencies
+        if: matrix.test_group == 'remainder-1' || matrix.test_group == 'remainder-2' || matrix.test_group == 'email-account'
+        run: |
+          wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y /tmp/wkhtmltox.deb
+
+      - name: Download prepared Frappe bench
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/prepared-bench
+
+      - name: Restore prepared Frappe bench
+        run: |
+          tar -C /home/runner -xf "$RUNNER_TEMP/prepared-bench/frappe-bench.tar"
+          pip install frappe-bench
+
+      - name: Restore reusable PostgreSQL Frappe fixture
+        env:
+          PGPASSWORD: root
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
+          CREATE DATABASE test_frappe OWNER test_frappe;
+          SQL
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe \
+            --dbname test_frappe \
+            --no-owner \
+            --no-privileges \
+            "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
+
+      - name: Start Frappe services
+        working-directory: /home/runner/frappe-bench
+        run: |
+          echo "127.0.0.1 test_site" | sudo tee -a /etc/hosts
+          bench start > "$GITHUB_WORKSPACE/bench_start.log" 2>&1 &
+
+          for _ in {1..30}; do
+            if curl --fail --silent --output /dev/null http://test_site:8000; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          cat "$GITHUB_WORKSPACE/bench_start.log"
+          exit 1
+
+      - name: Run upstream application tests
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench --site test_site set-config allow_tests true
+          if [[ "${{ matrix.app }}" == "frappe" ]]; then
+            cd sites
+            status=0
+            ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_frappe_test_group.py" \
+              --site test_site \
+              --group "${{ matrix.test_group }}" || status=$?
+
+            exit "$status"
+          else
+            cd sites
+            status=0
+            ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_app_test_group.py" \
+              --site test_site \
+              --app "${{ matrix.app }}" \
+              --group "${{ matrix.test_group }}" || status=$?
+
+            exit "$status"
+          fi
+        env:
+          TYPE: server
+          FRAPPE_BENCH_ROOT: /home/runner/frappe-bench
+
+  upstream-erpnext-postgres-tests-v15:
+    needs: prepare-upstream-erpnext-v15
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / payment reconciliation
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: payment-reconciliation
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 1
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-1
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 2
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-2
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 3
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-3
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 4
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-4
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 5
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-5
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 6
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-6
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 7
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-7
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 8
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-8
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 9
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-9
+          - frappe: version-15
+            app: erpnext
+            app_branch: version-15
+            label: ERPNext v15 / remainder 10
+            python: '3.10'
+            node: 18
+            artifact: erpnext-bench-v15
+            test_group: remainder-10
+    name: PostgreSQL upstream / ${{ matrix.label }}
+
+    services:
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+      smtp-server:
+        image: rnwood/smtp4dev:3.7.1
+        ports:
+          - 2525:25
+          - 3000:80
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: true
+
+      - name: Install test system dependencies
+        if: matrix.test_group == 'remainder-1' || matrix.test_group == 'remainder-2' || matrix.test_group == 'remainder-3' || matrix.test_group == 'remainder-4' || matrix.test_group == 'remainder-10'
+        run: |
+          wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y /tmp/wkhtmltox.deb
+
+      - name: Download prepared Frappe bench
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/prepared-bench
+
+      - name: Restore prepared Frappe bench
+        run: |
+          tar -C /home/runner -xf "$RUNNER_TEMP/prepared-bench/frappe-bench.tar"
+          pip install frappe-bench
+
+      - name: Create PostgreSQL test site
+        if: matrix.app == 'frappe'
+        working-directory: /home/runner/frappe-bench
+        run: |
+          # Frappe's own command tests read these from common_site_config,
+          # not from the arguments used to create the primary test site.
+          bench set-config root_login postgres -g
+          bench set-config root_password root -g
+          bench set-config admin_password admin -g
+          bench set-config db_type postgres -g
+
+          # Create the site with stock Frappe first. Frappe's before_tests hook
+          # intentionally skips setup when another app is already installed.
+          bench new-site test_site \
+            --db-type postgres \
+            --db-host 127.0.0.1 \
+            --db-port 5432 \
+            --db-name test_frappe \
+            --db-password test_frappe \
+            --db-root-username postgres \
+            --db-root-password root \
+            --admin-password admin
+
+          if [[ "${{ matrix.app }}" == "frappe" ]]; then
+            bench --site test_site execute frappe.utils.install.before_tests
+          fi
+          bench --site test_site install-app frappe_pg
+
+          if [[ "${{ matrix.app }}" == "erpnext" ]]; then
+            bench --site test_site install-app payments
+            bench --site test_site install-app erpnext
+          elif [[ "${{ matrix.app }}" == "hrms" ]]; then
+            bench --site test_site install-app payments
+            bench --site test_site install-app erpnext
+            bench --site test_site install-app hrms
+          fi
+
+          bench --site test_site set-config allow_tests 1 --parse
+          bench --site test_site set-config server_script_enabled 1 --parse
+          bench --site test_site set-config host_name "http://test_site:8000"
+          bench --site test_site set-config auto_email_id "test@example.com"
+          bench --site test_site set-config mail_server localhost
+          bench --site test_site set-config mail_port 2525 --parse
+          bench --site test_site set-config mail_login "test@example.com"
+          bench --site test_site set-config mail_password test
+          bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
+
+          # ERPNext v16's upstream server-test workflow explicitly warms its
+          # bootstrap records before running the suite. Without that pass, later
+          # bootstrap records can reference fixtures (for example the _TC
+          # warehouse) that have not been created yet. HRMS consumes the same
+          # ERPNext test data.
+          if [[ "${{ matrix.frappe }}" == "version-16" && "${{ matrix.app }}" != "frappe" ]]; then
+            bench --site test_site run-tests --lightmode --module erpnext.tests.bootstrap_test_data
+          fi
+
+          # Redis is provided by Actions services. Keep the web and worker
+          # processes that upstream Frappe's server-test setup starts.
+          sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
+        env:
+          CI: 'Yes'
+
+      - name: Restore reusable PostgreSQL app fixture
+        if: matrix.app != 'frappe'
+        env:
+          PGPASSWORD: root
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
+          CREATE DATABASE test_frappe OWNER test_frappe;
+          SQL
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe \
+            --dbname test_frappe \
+            --no-owner \
+            --no-privileges \
+            "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
+
+      - name: Start Frappe services
+        working-directory: /home/runner/frappe-bench
+        run: |
+          echo "127.0.0.1 test_site" | sudo tee -a /etc/hosts
+          bench start > "$GITHUB_WORKSPACE/bench_start.log" 2>&1 &
+
+          for _ in {1..30}; do
+            if curl --fail --silent --output /dev/null http://test_site:8000; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          cat "$GITHUB_WORKSPACE/bench_start.log"
+          exit 1
+
+      - name: Run upstream application tests
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench --site test_site set-config allow_tests true
+          if [[ "${{ matrix.app }}" == "frappe" ]]; then
+            cd sites
+            status=0
+            ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_frappe_test_group.py" \
+              --site test_site \
+              --group "${{ matrix.test_group }}" || status=$?
+
+            exit "$status"
+          else
+            cd sites
+            status=0
+            ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_app_test_group.py" \
+              --site test_site \
+              --app "${{ matrix.app }}" \
+              --group "${{ matrix.test_group }}" || status=$?
+
+            exit "$status"
+          fi
+        env:
+          TYPE: server
+          FRAPPE_BENCH_ROOT: /home/runner/frappe-bench
+
+  upstream-erpnext-postgres-tests-v16:
+    needs: prepare-upstream-erpnext-v16
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16 / payment reconciliation
+            python: '3.14'
+            node: 24
+            artifact: erpnext-bench-v16
+            test_group: payment-reconciliation
+          - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16 / remainder 1
+            python: '3.14'
+            node: 24
+            artifact: erpnext-bench-v16
+            test_group: remainder-1
+          - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16 / remainder 2
+            python: '3.14'
+            node: 24
+            artifact: erpnext-bench-v16
+            test_group: remainder-2
+          - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16 / remainder 3
+            python: '3.14'
+            node: 24
+            artifact: erpnext-bench-v16
+            test_group: remainder-3
+          - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16 / remainder 4
+            python: '3.14'
+            node: 24
+            artifact: erpnext-bench-v16
+            test_group: remainder-4
+          - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16 / remainder 5
+            python: '3.14'
+            node: 24
+            artifact: erpnext-bench-v16
+            test_group: remainder-5
+          - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16 / remainder 6
+            python: '3.14'
+            node: 24
+            artifact: erpnext-bench-v16
+            test_group: remainder-6
+          - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16 / remainder 7
+            python: '3.14'
+            node: 24
+            artifact: erpnext-bench-v16
+            test_group: remainder-7
+          - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16 / remainder 8
+            python: '3.14'
+            node: 24
+            artifact: erpnext-bench-v16
+            test_group: remainder-8
+          - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16 / remainder 9
+            python: '3.14'
+            node: 24
+            artifact: erpnext-bench-v16
+            test_group: remainder-9
+          - frappe: version-16
+            app: erpnext
+            app_branch: version-16
+            label: ERPNext v16 / remainder 10
+            python: '3.14'
+            node: 24
+            artifact: erpnext-bench-v16
+            test_group: remainder-10
+    name: PostgreSQL upstream / ${{ matrix.label }}
+
+    services:
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+      smtp-server:
+        image: rnwood/smtp4dev:3.7.1
+        ports:
+          - 2525:25
+          - 3000:80
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: true
+
+      - name: Install test system dependencies
+        if: matrix.test_group == 'remainder-1' || matrix.test_group == 'remainder-2' || matrix.test_group == 'remainder-3' || matrix.test_group == 'remainder-4' || matrix.test_group == 'remainder-10'
+        run: |
+          wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y /tmp/wkhtmltox.deb
+
+      - name: Download prepared Frappe bench
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/prepared-bench
+
+      - name: Restore prepared Frappe bench
+        run: |
+          tar -C /home/runner -xf "$RUNNER_TEMP/prepared-bench/frappe-bench.tar"
+          pip install frappe-bench
+
+      - name: Create PostgreSQL test site
+        if: matrix.app == 'frappe'
+        working-directory: /home/runner/frappe-bench
+        run: |
+          # Frappe's own command tests read these from common_site_config,
+          # not from the arguments used to create the primary test site.
+          bench set-config root_login postgres -g
+          bench set-config root_password root -g
+          bench set-config admin_password admin -g
+          bench set-config db_type postgres -g
+
+          # Create the site with stock Frappe first. Frappe's before_tests hook
+          # intentionally skips setup when another app is already installed.
+          bench new-site test_site \
+            --db-type postgres \
+            --db-host 127.0.0.1 \
+            --db-port 5432 \
+            --db-name test_frappe \
+            --db-password test_frappe \
+            --db-root-username postgres \
+            --db-root-password root \
+            --admin-password admin
+
+          if [[ "${{ matrix.app }}" == "frappe" ]]; then
+            bench --site test_site execute frappe.utils.install.before_tests
+          fi
+          bench --site test_site install-app frappe_pg
+
+          if [[ "${{ matrix.app }}" == "erpnext" ]]; then
+            bench --site test_site install-app payments
+            bench --site test_site install-app erpnext
+          elif [[ "${{ matrix.app }}" == "hrms" ]]; then
+            bench --site test_site install-app payments
+            bench --site test_site install-app erpnext
+            bench --site test_site install-app hrms
+          fi
+
+          bench --site test_site set-config allow_tests 1 --parse
+          bench --site test_site set-config server_script_enabled 1 --parse
+          bench --site test_site set-config host_name "http://test_site:8000"
+          bench --site test_site set-config auto_email_id "test@example.com"
+          bench --site test_site set-config mail_server localhost
+          bench --site test_site set-config mail_port 2525 --parse
+          bench --site test_site set-config mail_login "test@example.com"
+          bench --site test_site set-config mail_password test
+          bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
+
+          # ERPNext v16's upstream server-test workflow explicitly warms its
+          # bootstrap records before running the suite. Without that pass, later
+          # bootstrap records can reference fixtures (for example the _TC
+          # warehouse) that have not been created yet. HRMS consumes the same
+          # ERPNext test data.
+          if [[ "${{ matrix.frappe }}" == "version-16" && "${{ matrix.app }}" != "frappe" ]]; then
+            bench --site test_site run-tests --lightmode --module erpnext.tests.bootstrap_test_data
+          fi
+
+          # Redis is provided by Actions services. Keep the web and worker
+          # processes that upstream Frappe's server-test setup starts.
+          sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
+        env:
+          CI: 'Yes'
+
+      - name: Restore reusable PostgreSQL app fixture
+        if: matrix.app != 'frappe'
+        env:
+          PGPASSWORD: root
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
+          CREATE DATABASE test_frappe OWNER test_frappe;
+          SQL
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe \
+            --dbname test_frappe \
+            --no-owner \
+            --no-privileges \
+            "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
+
+      - name: Start Frappe services
+        working-directory: /home/runner/frappe-bench
+        run: |
+          echo "127.0.0.1 test_site" | sudo tee -a /etc/hosts
+          bench start > "$GITHUB_WORKSPACE/bench_start.log" 2>&1 &
+
+          for _ in {1..30}; do
+            if curl --fail --silent --output /dev/null http://test_site:8000; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          cat "$GITHUB_WORKSPACE/bench_start.log"
+          exit 1
+
+      - name: Run upstream application tests
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench --site test_site set-config allow_tests true
+          if [[ "${{ matrix.app }}" == "frappe" ]]; then
+            cd sites
+            status=0
+            ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_frappe_test_group.py" \
+              --site test_site \
+              --group "${{ matrix.test_group }}" || status=$?
+
+            exit "$status"
+          else
+            cd sites
+            status=0
+            ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_app_test_group.py" \
+              --site test_site \
+              --app "${{ matrix.app }}" \
+              --group "${{ matrix.test_group }}" || status=$?
+
+            exit "$status"
+          fi
+        env:
+          TYPE: server
+          FRAPPE_BENCH_ROOT: /home/runner/frappe-bench
+
+  upstream-hrms-postgres-tests-v15:
+    needs: prepare-upstream-hrms-v15
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / leave heavy
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: leave-heavy
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / payroll heavy
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: payroll-heavy
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / remainder 1
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: remainder-1
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / remainder 2
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: remainder-2
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / remainder 3
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: remainder-3
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / remainder 4
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: remainder-4
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / remainder 5
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: remainder-5
+          - frappe: version-15
+            app: hrms
+            app_branch: version-15
+            label: HRMS v15 / remainder 6
+            python: '3.10'
+            node: 18
+            artifact: hrms-bench-v15
+            test_group: remainder-6
+    name: PostgreSQL upstream / ${{ matrix.label }}
+
+    services:
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+      smtp-server:
+        image: rnwood/smtp4dev:3.7.1
+        ports:
+          - 2525:25
+          - 3000:80
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: true
+
+      - name: Install test system dependencies
+        if: matrix.test_group == 'payroll-heavy' || matrix.test_group == 'leave-heavy' || matrix.test_group == 'remainder-5' || matrix.test_group == 'remainder-6'
+        run: |
+          wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y /tmp/wkhtmltox.deb
+
+      - name: Download prepared Frappe bench
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/prepared-bench
+
+      - name: Restore prepared Frappe bench
+        run: |
+          tar -C /home/runner -xf "$RUNNER_TEMP/prepared-bench/frappe-bench.tar"
+          pip install frappe-bench
+
+      - name: Create PostgreSQL test site
+        if: matrix.app == 'frappe'
+        working-directory: /home/runner/frappe-bench
+        run: |
+          # Frappe's own command tests read these from common_site_config,
+          # not from the arguments used to create the primary test site.
+          bench set-config root_login postgres -g
+          bench set-config root_password root -g
+          bench set-config admin_password admin -g
+          bench set-config db_type postgres -g
+
+          # Create the site with stock Frappe first. Frappe's before_tests hook
+          # intentionally skips setup when another app is already installed.
+          bench new-site test_site \
+            --db-type postgres \
+            --db-host 127.0.0.1 \
+            --db-port 5432 \
+            --db-name test_frappe \
+            --db-password test_frappe \
+            --db-root-username postgres \
+            --db-root-password root \
+            --admin-password admin
+
+          if [[ "${{ matrix.app }}" == "frappe" ]]; then
+            bench --site test_site execute frappe.utils.install.before_tests
+          fi
+          bench --site test_site install-app frappe_pg
+
+          if [[ "${{ matrix.app }}" == "erpnext" ]]; then
+            bench --site test_site install-app payments
+            bench --site test_site install-app erpnext
+          elif [[ "${{ matrix.app }}" == "hrms" ]]; then
+            bench --site test_site install-app payments
+            bench --site test_site install-app erpnext
+            bench --site test_site install-app hrms
+          fi
+
+          bench --site test_site set-config allow_tests 1 --parse
+          bench --site test_site set-config server_script_enabled 1 --parse
+          bench --site test_site set-config host_name "http://test_site:8000"
+          bench --site test_site set-config auto_email_id "test@example.com"
+          bench --site test_site set-config mail_server localhost
+          bench --site test_site set-config mail_port 2525 --parse
+          bench --site test_site set-config mail_login "test@example.com"
+          bench --site test_site set-config mail_password test
+          bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
+
+          # ERPNext v16's upstream server-test workflow explicitly warms its
+          # bootstrap records before running the suite. Without that pass, later
+          # bootstrap records can reference fixtures (for example the _TC
+          # warehouse) that have not been created yet. HRMS consumes the same
+          # ERPNext test data.
+          if [[ "${{ matrix.frappe }}" == "version-16" && "${{ matrix.app }}" != "frappe" ]]; then
+            bench --site test_site run-tests --lightmode --module erpnext.tests.bootstrap_test_data
+          fi
+
+          # Redis is provided by Actions services. Keep the web and worker
+          # processes that upstream Frappe's server-test setup starts.
+          sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
+        env:
+          CI: 'Yes'
+
+      - name: Restore reusable PostgreSQL app fixture
+        if: matrix.app != 'frappe'
+        env:
+          PGPASSWORD: root
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
+          CREATE DATABASE test_frappe OWNER test_frappe;
+          SQL
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe \
+            --dbname test_frappe \
+            --no-owner \
+            --no-privileges \
+            "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
+
+      - name: Start Frappe services
+        working-directory: /home/runner/frappe-bench
+        run: |
+          echo "127.0.0.1 test_site" | sudo tee -a /etc/hosts
+          bench start > "$GITHUB_WORKSPACE/bench_start.log" 2>&1 &
+
+          for _ in {1..30}; do
+            if curl --fail --silent --output /dev/null http://test_site:8000; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          cat "$GITHUB_WORKSPACE/bench_start.log"
+          exit 1
+
+      - name: Run upstream application tests
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench --site test_site set-config allow_tests true
+          if [[ "${{ matrix.app }}" == "frappe" ]]; then
+            cd sites
+            status=0
+            ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_frappe_test_group.py" \
+              --site test_site \
+              --group "${{ matrix.test_group }}" || status=$?
+
+            exit "$status"
+          else
+            cd sites
+            status=0
+            ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_app_test_group.py" \
+              --site test_site \
+              --app "${{ matrix.app }}" \
+              --group "${{ matrix.test_group }}" || status=$?
+
+            exit "$status"
+          fi
+        env:
+          TYPE: server
+          FRAPPE_BENCH_ROOT: /home/runner/frappe-bench
+
+  upstream-hrms-postgres-tests-v16:
+    needs: prepare-upstream-hrms-v16
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - frappe: version-16
+            app: hrms
+            app_branch: version-16
+            label: HRMS v16 / leave heavy
+            python: '3.14'
+            node: 24
+            artifact: hrms-bench-v16
+            test_group: leave-heavy
+          - frappe: version-16
+            app: hrms
+            app_branch: version-16
+            label: HRMS v16 / payroll heavy
+            python: '3.14'
+            node: 24
+            artifact: hrms-bench-v16
+            test_group: payroll-heavy
+          - frappe: version-16
+            app: hrms
+            app_branch: version-16
+            label: HRMS v16 / remainder 1
+            python: '3.14'
+            node: 24
+            artifact: hrms-bench-v16
+            test_group: remainder-1
+          - frappe: version-16
+            app: hrms
+            app_branch: version-16
+            label: HRMS v16 / remainder 2
+            python: '3.14'
+            node: 24
+            artifact: hrms-bench-v16
+            test_group: remainder-2
+          - frappe: version-16
+            app: hrms
+            app_branch: version-16
+            label: HRMS v16 / remainder 3
+            python: '3.14'
+            node: 24
+            artifact: hrms-bench-v16
+            test_group: remainder-3
+          - frappe: version-16
+            app: hrms
+            app_branch: version-16
+            label: HRMS v16 / remainder 4
+            python: '3.14'
+            node: 24
+            artifact: hrms-bench-v16
+            test_group: remainder-4
+          - frappe: version-16
+            app: hrms
+            app_branch: version-16
+            label: HRMS v16 / remainder 5
+            python: '3.14'
+            node: 24
+            artifact: hrms-bench-v16
+            test_group: remainder-5
+          - frappe: version-16
+            app: hrms
+            app_branch: version-16
+            label: HRMS v16 / remainder 6
+            python: '3.14'
+            node: 24
+            artifact: hrms-bench-v16
+            test_group: remainder-6
+    name: PostgreSQL upstream / ${{ matrix.label }}
+
+    services:
+      redis-cache:
+        image: redis:alpine
+        ports:
+          - 13000:6379
+      redis-queue:
+        image: redis:alpine
+        ports:
+          - 11000:6379
+      smtp-server:
+        image: rnwood/smtp4dev:3.7.1
+        ports:
+          - 2525:25
+          - 3000:80
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: root
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node }}
+          check-latest: true
+
+      - name: Install test system dependencies
+        if: matrix.test_group == 'payroll-heavy' || matrix.test_group == 'leave-heavy' || matrix.test_group == 'remainder-5' || matrix.test_group == 'remainder-6'
+        run: |
+          wget -q -O /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y /tmp/wkhtmltox.deb
+
+      - name: Download prepared Frappe bench
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/prepared-bench
+
+      - name: Restore prepared Frappe bench
+        run: |
+          tar -C /home/runner -xf "$RUNNER_TEMP/prepared-bench/frappe-bench.tar"
+          pip install frappe-bench
+
+      - name: Create PostgreSQL test site
+        if: matrix.app == 'frappe'
+        working-directory: /home/runner/frappe-bench
+        run: |
+          # Frappe's own command tests read these from common_site_config,
+          # not from the arguments used to create the primary test site.
+          bench set-config root_login postgres -g
+          bench set-config root_password root -g
+          bench set-config admin_password admin -g
+          bench set-config db_type postgres -g
+
+          # Create the site with stock Frappe first. Frappe's before_tests hook
+          # intentionally skips setup when another app is already installed.
+          bench new-site test_site \
+            --db-type postgres \
+            --db-host 127.0.0.1 \
+            --db-port 5432 \
+            --db-name test_frappe \
+            --db-password test_frappe \
+            --db-root-username postgres \
+            --db-root-password root \
+            --admin-password admin
+
+          if [[ "${{ matrix.app }}" == "frappe" ]]; then
+            bench --site test_site execute frappe.utils.install.before_tests
+          fi
+          bench --site test_site install-app frappe_pg
+
+          if [[ "${{ matrix.app }}" == "erpnext" ]]; then
+            bench --site test_site install-app payments
+            bench --site test_site install-app erpnext
+          elif [[ "${{ matrix.app }}" == "hrms" ]]; then
+            bench --site test_site install-app payments
+            bench --site test_site install-app erpnext
+            bench --site test_site install-app hrms
+          fi
+
+          bench --site test_site set-config allow_tests 1 --parse
+          bench --site test_site set-config server_script_enabled 1 --parse
+          bench --site test_site set-config host_name "http://test_site:8000"
+          bench --site test_site set-config auto_email_id "test@example.com"
+          bench --site test_site set-config mail_server localhost
+          bench --site test_site set-config mail_port 2525 --parse
+          bench --site test_site set-config mail_login "test@example.com"
+          bench --site test_site set-config mail_password test
+          bench --site test_site set-config disable_mail_smtp_authentication 1 --parse
+
+          # ERPNext v16's upstream server-test workflow explicitly warms its
+          # bootstrap records before running the suite. Without that pass, later
+          # bootstrap records can reference fixtures (for example the _TC
+          # warehouse) that have not been created yet. HRMS consumes the same
+          # ERPNext test data.
+          if [[ "${{ matrix.frappe }}" == "version-16" && "${{ matrix.app }}" != "frappe" ]]; then
+            bench --site test_site run-tests --lightmode --module erpnext.tests.bootstrap_test_data
+          fi
+
+          # Redis is provided by Actions services. Keep the web and worker
+          # processes that upstream Frappe's server-test setup starts.
+          sed -i '/^redis_/d; /^watch:/d; /^schedule:/d; /^socketio:/d' Procfile
+        env:
+          CI: 'Yes'
+
+      - name: Restore reusable PostgreSQL app fixture
+        if: matrix.app != 'frappe'
+        env:
+          PGPASSWORD: root
+        run: |
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE test_frappe LOGIN PASSWORD 'test_frappe';
+          CREATE DATABASE test_frappe OWNER test_frappe;
+          SQL
+          PGPASSWORD=test_frappe pg_restore -h 127.0.0.1 -U test_frappe \
+            --dbname test_frappe \
+            --no-owner \
+            --no-privileges \
+            "$RUNNER_TEMP/prepared-bench/test_frappe.dump"
+
+      - name: Start Frappe services
+        working-directory: /home/runner/frappe-bench
+        run: |
+          echo "127.0.0.1 test_site" | sudo tee -a /etc/hosts
+          bench start > "$GITHUB_WORKSPACE/bench_start.log" 2>&1 &
+
+          for _ in {1..30}; do
+            if curl --fail --silent --output /dev/null http://test_site:8000; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          cat "$GITHUB_WORKSPACE/bench_start.log"
+          exit 1
+
+      - name: Run upstream application tests
+        working-directory: /home/runner/frappe-bench
+        run: |
+          bench --site test_site set-config allow_tests true
+          if [[ "${{ matrix.app }}" == "frappe" ]]; then
+            cd sites
+            status=0
+            ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_frappe_test_group.py" \
+              --site test_site \
+              --group "${{ matrix.test_group }}" || status=$?
+
+            exit "$status"
+          else
+            cd sites
+            status=0
+            ../env/bin/python "$GITHUB_WORKSPACE/.github/scripts/run_app_test_group.py" \
+              --site test_site \
+              --app "${{ matrix.app }}" \
+              --group "${{ matrix.test_group }}" || status=$?
+
+            exit "$status"
+          fi
+        env:
+          TYPE: server
+          FRAPPE_BENCH_ROOT: /home/runner/frappe-bench
