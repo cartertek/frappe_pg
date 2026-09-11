@@ -841,3 +841,30 @@ class TestProductBundleBalanceGroupingCompatibility(unittest.TestCase):
             self.assertFalse(product_bundle_balance_grouping.apply())
             self.assertTrue(product_bundle_balance_grouping.remove())
             self.assertIs(module.get_item_wise_max_posting_datetime, old)
+
+
+class TestOpeningInvoiceSavepointCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import opening_invoice_savepoint
+
+        opening_invoice_savepoint._original = None
+        opening_invoice_savepoint._patched = None
+
+    def test_applies_to_full_rollback_implementation_and_restores(self):
+        from frappe_pg.compat.erpnext import opening_invoice_savepoint
+
+        def old_start_import(invoices):
+            try:
+                return invoices
+            except Exception:
+                frappe.db.rollback()  # noqa: F821
+                doc.log_error("Opening invoice creation failed")  # noqa: F821
+
+        module = types.SimpleNamespace(start_import=old_start_import)
+        with patch.object(opening_invoice_savepoint, "_load", return_value=module):
+            self.assertTrue(opening_invoice_savepoint.is_needed())
+            self.assertTrue(opening_invoice_savepoint.apply())
+            self.assertIs(module.start_import, opening_invoice_savepoint._compatible_start_import)
+            self.assertFalse(opening_invoice_savepoint.apply())
+            self.assertTrue(opening_invoice_savepoint.remove())
+            self.assertIs(module.start_import, old_start_import)
