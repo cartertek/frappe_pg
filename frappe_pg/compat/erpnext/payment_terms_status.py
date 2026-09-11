@@ -10,7 +10,9 @@ _patched = None
 
 def _load():
     try:
-        return import_module("erpnext.selling.report.payment_terms_status_for_sales_order.payment_terms_status_for_sales_order")
+        return import_module(
+            "erpnext.selling.report.payment_terms_status_for_sales_order.payment_terms_status_for_sales_order"
+        )
     except ImportError:
         return None
 
@@ -70,13 +72,25 @@ def apply():
         datediff = query_builder.CustomFunction("DATEDIFF", ["cur_date", "due_date"])
         ifelse = query_builder.CustomFunction("IF", ["condition", "then", "else"])
         query_so = (
-            qb.from_(so).join(soi).on(soi.parent == so.name).join(ps).on(ps.parent == so.name)
-            .select(so.name).distinct()
+            qb.from_(so)
+            .join(soi)
+            .on(soi.parent == so.name)
+            .join(ps)
+            .on(ps.parent == so.name)
+            .select(so.name)
+            .distinct()
             .select(
-                so.customer, so.transaction_date.as_("submitted"),
-                ifelse(datediff(ps.due_date, module.functions.CurDate()) < 0, "Overdue", "Unpaid").as_("status"),
-                ps.payment_term, ps.description, ps.due_date, ps.invoice_portion,
-                ps.base_payment_amount, ps.paid_amount,
+                so.customer,
+                so.transaction_date.as_("submitted"),
+                ifelse(datediff(ps.due_date, module.functions.CurDate()) < 0, "Overdue", "Unpaid").as_(
+                    "status"
+                ),
+                ps.payment_term,
+                ps.description,
+                ps.due_date,
+                ps.invoice_portion,
+                ps.base_payment_amount,
+                ps.paid_amount,
             )
             .where(
                 (so.docstatus == 1)
@@ -84,7 +98,8 @@ def apply():
                 & (so.company == conditions.company)
                 & (so.transaction_date[conditions.start_date : conditions.end_date])
             )
-            .where(Criterion.all(filter_criterions)).orderby(so.name, so.transaction_date, ps.due_date)
+            .where(Criterion.all(filter_criterions))
+            .orderby(so.name, so.transaction_date, ps.due_date)
         )
         sorders = query_so.run(as_dict=True)
         invoices = []
@@ -93,10 +108,16 @@ def apply():
             si = qb.DocType("Sales Invoice")
             sii = qb.DocType("Sales Invoice Item")
             query_inv = (
-                qb.from_(sii).right_join(si).on(si.name == sii.parent).inner_join(soi).on(soi.name == sii.so_detail)
+                qb.from_(sii)
+                .right_join(si)
+                .on(si.name == sii.parent)
+                .inner_join(soi)
+                .on(soi.name == sii.so_detail)
                 .select(
-                    sii.sales_order.as_("sales_order"), sii.parent.as_("invoice"),
-                    Sum(sii.base_net_amount).as_("order_net_amount"), Max(si.base_grand_total).as_("invoice_grand_total"),
+                    sii.sales_order.as_("sales_order"),
+                    sii.parent.as_("invoice"),
+                    Sum(sii.base_net_amount).as_("order_net_amount"),
+                    Max(si.base_grand_total).as_("invoice_grand_total"),
                 )
                 .where((sii.sales_order.isin([row.name for row in sorders])) & (si.docstatus == 1))
                 .groupby(sii.parent, sii.sales_order)
