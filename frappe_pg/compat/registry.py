@@ -47,6 +47,7 @@ _COMPATIBILITY_OVERRIDES = (
     payment_terms_status,
     sales_order_elapsed_time,
     period_closing_fiscal_year,
+    period_closing_postgres_cursor,
     batch_valuation_lock,
     batch_valuation_advisory_lock,
     future_stock_voucher_lock,

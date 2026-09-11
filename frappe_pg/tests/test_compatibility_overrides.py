@@ -895,6 +895,14 @@ class TestAccountsReceivableGLBalanceCompatibility(unittest.TestCase):
             self.assertIs(module.get_gl_balance, old)
 
 
+class TestCompatibilityRegistryCoverage(unittest.TestCase):
+    def test_period_closing_postgres_cursor_is_registered(self):
+        from frappe_pg.compat import registry
+        from frappe_pg.compat.erpnext import period_closing_postgres_cursor
+
+        self.assertIn(period_closing_postgres_cursor, registry._COMPATIBILITY_OVERRIDES)
+
+
 class TestPeriodClosingPostgresCursorCompatibility(unittest.TestCase):
     def tearDown(self):
         from frappe_pg.compat.erpnext import period_closing_postgres_cursor
