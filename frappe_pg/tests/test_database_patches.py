@@ -64,6 +64,7 @@ from frappe_pg.postgres.query_transformers import (
     normalize_erpnext_party_specific_item_based_on,
     normalize_erpnext_production_plan_explosion_grouping,
     normalize_erpnext_production_plan_subitems_grouping,
+    normalize_erpnext_purchase_return_result_shape,
     normalize_erpnext_purchased_items_result_shape,
     normalize_erpnext_repost_item_fields_grouping,
     normalize_erpnext_repost_item_grouping,
@@ -250,6 +251,20 @@ class TestQueryTransformers(unittest.TestCase):
         transformed = normalize_erpnext_party_specific_item_based_on(query)
         self.assertIn('"based_on_value"=%s', transformed)
         self.assertNotIn('"based_on"=%s', transformed)
+
+    def test_purchase_return_grouped_result_shape_stays_two_columns(self):
+        query = (
+            'SELECT "tabPurchase Receipt Item"."purchase_receipt_item",'
+            'SUM(ABS("tabPurchase Receipt Item"."qty")) AS "qty",'
+            'MAX("tabPurchase Receipt"."modified") AS "tabPurchase Receipt.modified" '
+            'FROM "tabPurchase Receipt" JOIN "tabPurchase Receipt Item" ON 1=1 '
+            'GROUP BY "tabPurchase Receipt Item"."purchase_receipt_item" '
+            'ORDER BY "tabPurchase Receipt.modified" DESC'
+        )
+        transformed = normalize_erpnext_purchase_return_result_shape(query)
+        self.assertEqual(transformed.count(' AS "qty"'), 1)
+        self.assertNotIn('modified', transformed)
+        self.assertNotIn('ORDER BY', transformed.upper())
 
     def test_bom_stock_calculated_groups_scalar_fields(self):
         query = (
