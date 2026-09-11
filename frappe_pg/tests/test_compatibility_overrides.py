@@ -905,6 +905,14 @@ class TestProductBundleBalanceGroupingCompatibility(unittest.TestCase):
             self.assertIs(module.get_item_wise_max_posting_datetime, old)
 
 
+class TestOpeningInvoiceSavepointRegistryCoverage(unittest.TestCase):
+    def test_opening_invoice_savepoint_is_registered(self):
+        from frappe_pg.compat import registry
+        from frappe_pg.compat.erpnext import opening_invoice_savepoint
+
+        self.assertIn(opening_invoice_savepoint, registry._COMPATIBILITY_OVERRIDES)
+
+
 class TestOpeningInvoiceSavepointCompatibility(unittest.TestCase):
     def tearDown(self):
         from frappe_pg.compat.erpnext import opening_invoice_savepoint

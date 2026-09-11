@@ -55,6 +55,7 @@ _COMPATIBILITY_OVERRIDES = (
     batch_valuation_advisory_lock,
     future_stock_voucher_lock,
     manufacturing_grouping,
+    opening_invoice_savepoint,
     bom_stock_analysis_grouping,
     stock_ageing_postgres_cursor,
     stock_balance_postgres_cursor,
