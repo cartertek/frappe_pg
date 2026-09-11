@@ -2188,7 +2188,7 @@ def normalize_erpnext_party_specific_item_based_on(query):
 
 def normalize_erpnext_bom_stock_reports(query):
     """Backport PostgreSQL grouping semantics for legacy BOM stock reports."""
-    if not re.search(r'\bFROM\s+"tabBOM Item"', query, re.IGNORECASE):
+    if not re.search(r'\b(?:FROM|JOIN)\s+"tabBOM Item"', query, re.IGNORECASE):
         return query
     if not re.search(r'\bGROUP\s+BY\s+"tabBOM Item"\."item_code"', query, re.IGNORECASE):
         return query
@@ -2207,6 +2207,19 @@ def normalize_erpnext_bom_stock_reports(query):
             lambda m, field=field, aggregate=aggregate: f'{aggregate}("tabBOM Item"."{field}")',
             query,
             count=1,
+            flags=re.IGNORECASE,
+        )
+    if re.search(r'\bJOIN\s+"tabBOM"', query, re.IGNORECASE):
+        query = re.sub(
+            r'(?<![A-Za-z0-9_.])"tabBOM"\."quantity"',
+            'MAX("tabBOM"."quantity")',
+            query,
+            flags=re.IGNORECASE,
+        )
+        query = re.sub(
+            r'(?<![A-Za-z0-9_.])"sq0"\."actual_qty"',
+            'MAX("sq0"."actual_qty")',
+            query,
             flags=re.IGNORECASE,
         )
     return query

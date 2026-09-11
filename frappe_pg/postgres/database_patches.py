@@ -104,7 +104,7 @@ def _normalize_item_attribute_values(query, values):
         return values
     params = set(
         re.findall(
-            r'(?:"tabItem Attribute Value"\.)?"?attribute_value"?\s*=\s*%\((?P<param>[A-Za-z_][A-Za-z0-9_]*)\)s',
+            r'(?:(?:"tabItem Attribute Value"|"tabItem Variant Attribute")\.)?"?attribute_value"?\s*=\s*%\((?P<param>[A-Za-z_][A-Za-z0-9_]*)\)s',
             query,
             re.IGNORECASE,
         )
