@@ -847,6 +847,16 @@ def convert_numeric_truthiness(query):
 
     query = case_operand.sub(replace_case_operand, query)
 
+    # MariaDB also accepts integer constants directly as boolean OR operands.
+    # PostgreSQL requires a real boolean. Restrict this to OR so it cannot be
+    # confused with the upper bound of a BETWEEN ... AND ... expression.
+    query = re.sub(
+        r"(?P<prefix>\bOR\b)(?P<space>\s*)(?P<literal>[01])(?=(?P<trailing>\s*)(?:\bTHEN\b|\bAND\b|\bOR\b|\)|$))",
+        lambda m: f"{m.group('prefix')}{m.group('space')}{'TRUE' if m.group('literal') == '1' else 'FALSE'}",
+        query,
+        flags=re.IGNORECASE,
+    )
+
     def replace(match):
         # ``("name")`` is equally valid as a function/group argument and does
         # not establish boolean context. Require an adjacent AND/OR when the

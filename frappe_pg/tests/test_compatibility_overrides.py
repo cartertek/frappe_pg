@@ -741,3 +741,103 @@ class TestPostgresDateFunctionsCompatibility(unittest.TestCase):
         with patch.object(postgres_date_functions, "_load_custom_module", return_value=module):
             self.assertFalse(postgres_date_functions.is_needed())
             self.assertFalse(postgres_date_functions.apply())
+
+
+class TestStockAgeingPostgresCursorCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import stock_ageing_postgres_cursor
+
+        stock_ageing_postgres_cursor._original = None
+        stock_ageing_postgres_cursor._patched = None
+
+    def test_postgres_buffers_sle_before_processing_and_restores_original(self):
+        from frappe_pg.compat.erpnext import stock_ageing_postgres_cursor
+
+        events = []
+
+        class FIFOSlots:
+            def __init__(self):
+                self.sle = None
+                self.filters = {"show_warehouse_wise_stock": True}
+                self.item_details = {"ok": True}
+
+            def generate(self):
+                stock_ledger_entries = self._get_stock_ledger_entries()
+                with frappe.db.unbuffered_cursor():  # noqa: F821
+                    return list(stock_ledger_entries)
+
+            def _get_bundle_wise_details(self, stock_ledger_entries):
+                return {}, {}
+
+            def prepare_stock_reco_voucher_wise_count(self):
+                events.append("prepare")
+
+            def _prefetch_batchwise_valuations(self):
+                events.append("prefetch-batch")
+
+            def _prefetch_valuation_methods(self):
+                events.append("prefetch-method")
+
+            def _get_stock_ledger_entries(self):
+                def rows():
+                    events.append("yield-1")
+                    yield {"name": "A"}
+                    events.append("yield-2")
+                    yield {"name": "B"}
+
+                return rows()
+
+            def _process_stock_ledger_entry(self, row, serials, batches):
+                events.append(f"process-{row['name']}")
+
+            def _recompute_moving_average_slots(self):
+                events.append("recompute")
+
+            def _rebalance_batch_slots(self):
+                events.append("rebalance")
+
+            def _aggregate_details_by_item(self, details):
+                return details
+
+        module = types.SimpleNamespace(FIFOSlots=FIFOSlots, get_float_precision=lambda: 6)
+        fake_frappe = types.SimpleNamespace(db=types.SimpleNamespace(db_type="postgres"))
+        original = FIFOSlots.generate
+        with (
+            patch.object(stock_ageing_postgres_cursor, "_load", return_value=module),
+            patch.dict(sys.modules, {"frappe": fake_frappe}),
+        ):
+            self.assertTrue(stock_ageing_postgres_cursor.is_needed())
+            self.assertTrue(stock_ageing_postgres_cursor.apply())
+            result = FIFOSlots().generate()
+            self.assertEqual(result, {"ok": True})
+            self.assertLess(events.index("yield-2"), events.index("process-A"))
+            self.assertEqual(events.count("process-A"), 1)
+            self.assertEqual(events.count("process-B"), 1)
+            self.assertTrue(stock_ageing_postgres_cursor.remove())
+            self.assertIs(FIFOSlots.generate, original)
+
+
+class TestProductBundleBalanceGroupingCompatibility(unittest.TestCase):
+    def tearDown(self):
+        from frappe_pg.compat.erpnext import product_bundle_balance_grouping
+
+        product_bundle_balance_grouping._original = None
+        product_bundle_balance_grouping._patched = None
+
+    def test_applies_only_to_grouped_query_that_selects_unused_name(self):
+        from frappe_pg.compat.erpnext import product_bundle_balance_grouping
+
+        def old(filters, items):
+            query = sle.select(sle.item_code, sle.warehouse, sle.name, Max(sle.posting_datetime))  # noqa: F821
+            return query.groupby(sle.item_code, sle.warehouse)  # noqa: F821
+
+        module = types.SimpleNamespace(get_item_wise_max_posting_datetime=old)
+        with patch.object(product_bundle_balance_grouping, "_load", return_value=module):
+            self.assertTrue(product_bundle_balance_grouping.is_needed())
+            self.assertTrue(product_bundle_balance_grouping.apply())
+            self.assertIs(
+                module.get_item_wise_max_posting_datetime, product_bundle_balance_grouping._compatible
+            )
+            self.assertFalse(product_bundle_balance_grouping.apply())
+            self.assertTrue(product_bundle_balance_grouping.remove())
+            self.assertIs(module.get_item_wise_max_posting_datetime, old)
