@@ -390,6 +390,8 @@ def convert_mysql_date_arithmetic(query):
         expr = match.group("expr").strip()
         if re.fullmatch(r"CURDATE\(\)", expr, re.IGNORECASE):
             expr = "CURRENT_DATE"
+        elif re.fullmatch(r"NOW\(\)", expr, re.IGNORECASE):
+            expr = "NOW()"
         amount = match.group("amount")
         unit = match.group("unit").lower()
         return f"{expr} - INTERVAL '{amount} {unit}'"
@@ -486,7 +488,15 @@ def expand_mysql_having_alias(query):
     having_start = re.search(r"\bHAVING\b", query, re.IGNORECASE)
     if not having_start:
         return query
-    suffix = query[having_start.end() :]
+    tail = query[having_start.end() :]
+    clause_end = re.search(r"\b(?:ORDER\s+BY|LIMIT|OFFSET)\b", tail, re.IGNORECASE)
+    if clause_end:
+        having_clause = tail[: clause_end.start()]
+        remainder = tail[clause_end.start() :]
+    else:
+        having_clause = tail
+        remainder = ""
+    suffix = having_clause
     for alias, expression in sorted(aliases.items(), key=lambda item: len(item[0]), reverse=True):
         alias_ref = re.compile(
             rf'(?<![."A-Za-z0-9_$])(?:"{re.escape(alias)}"|{re.escape(alias)})(?!["A-Za-z0-9_$])',
@@ -504,7 +514,7 @@ def expand_mysql_having_alias(query):
             return f'({expression})'
 
         suffix = alias_ref.sub(replace_alias, suffix)
-    return query[: having_start.end()] + suffix
+    return query[: having_start.end()] + suffix + remainder
 
 
 def remove_order_by_from_aggregate_only_query(query):
@@ -1961,11 +1971,17 @@ def normalize_erpnext_reserved_warehouse_distinct(query):
     )
     if not order_match:
         return query
-    group = ' GROUP BY "warehouse" '
+    warehouse_ref = re.search(
+        r'\bSELECT\s+((?:"tabStock Reservation Entry"\.)?"warehouse")', query, re.IGNORECASE
+    ).group(1)
+    creation_ref = re.search(
+        r'\bORDER\s+BY\s+((?:"tabStock Reservation Entry"\.)?"creation")', query, re.IGNORECASE
+    ).group(1)
+    group = f" GROUP BY {warehouse_ref} "
     query = query[: order_match.start()] + group + query[order_match.start() :]
     return re.sub(
         r'\bORDER\s+BY\s+(?:"tabStock Reservation Entry"\.)?"creation"(?P<direction>\s+(?:ASC|DESC))?',
-        lambda match: 'ORDER BY MIN("creation")' + (match.group("direction") or ""),
+        lambda match: f"ORDER BY MIN({creation_ref})" + (match.group("direction") or ""),
         query,
         count=1,
         flags=re.IGNORECASE,
@@ -2268,6 +2284,9 @@ def convert_mysql_show_index(query):
         filters.append("a.attname='" + column.group(1).replace("'", "''") + "'")
     if re.search(r"Non_unique\s*=\s*'?0'?", where, re.IGNORECASE):
         filters.append("ix.indisunique")
+    sequence = re.search(r"Seq_in_index\s*=\s*'?(\d+)'?", where, re.IGNORECASE)
+    if sequence:
+        filters.append(f"k.ord={int(sequence.group(1))}")
     return (
         'SELECT i.relname AS "Key_name", a.attname AS "Column_name", '
         'CASE WHEN ix.indisunique THEN 0 ELSE 1 END AS "Non_unique" '

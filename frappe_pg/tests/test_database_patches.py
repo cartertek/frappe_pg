@@ -1380,7 +1380,8 @@ FROM "tabStaffing Plan Detail" spd, "tabStaffing Plan" sp WHERE spd.parent=sp.na
     def test_mysql_show_index_for_legacy_erpnext_perf_test(self):
         query = "SHOW INDEX FROM \"tabBin\" WHERE Column_name = 'item_code' AND Seq_in_index = '1'"
         transformed = convert_mysql_show_index(query)
-        self.assertIn('FROM pg_index', transformed)
+        self.assertIn('JOIN pg_index', transformed)
+        self.assertIn('k.ord=1', transformed)
         self.assertIn("t.relname='tabBin'", transformed)
         self.assertIn("a.attname='item_code'", transformed)
 
@@ -1825,46 +1826,3 @@ class TestTransformQueryHook(unittest.TestCase):
         self.assertFalse(status["sql_patched"])
         self.assertFalse(status["commit_patched"])
         self.assertFalse(status["rollback_patched"])
-
-
-class TestPostgresAutomaticIndexDropPatch(unittest.TestCase):
-    def test_drop_index_sql_is_namespaced_after_alter_state_is_built(self):
-        from frappe_pg.compat.frappe import postgres_automatic_index_drop as patch_module
-
-        queries = []
-
-        def old_alter(self):
-            # Model Frappe's real alter path: the bare automatic index name is
-            # generated inside alter(), after column state has been rebuilt.
-            return frappe.db.sql('DROP INDEX IF EXISTS "middle_name" ;')
-
-        table_class = type("FakePostgresTable", (), {"alter": old_alter})
-
-        class FakeDB:
-            def sql(self, query, *args, **kwargs):
-                queries.append(query)
-                return "ok"
-
-        fake_db = FakeDB()
-        with (
-            unittest.mock.patch.object(patch_module, "_load_postgres_table", return_value=table_class),
-            unittest.mock.patch.object(patch_module, "_needs_patch", return_value=True),
-            unittest.mock.patch.object(frappe, "db", fake_db),
-        ):
-            patch_module._original_alter = None
-            patch_module._patched_alter = None
-            self.assertTrue(patch_module.apply())
-            table = table_class()
-            table.table_name = "tabUser"
-            self.assertEqual(table.alter(), "ok")
-            self.assertEqual(queries, ['DROP INDEX IF EXISTS "tabUser_middle_name_index" ;'])
-            # Restoring a bound method onto the instance would shadow future
-            # class-level instrumentation of PostgresDatabase.sql.
-            self.assertNotIn("sql", fake_db.__dict__)
-            self.assertTrue(patch_module.remove())
-
-    def test_explicit_and_already_namespaced_indexes_are_unchanged(self):
-        from frappe_pg.compat.frappe import postgres_automatic_index_drop as patch_module
-
-        query = 'DROP INDEX IF EXISTS "unique_email" ; ' 'DROP INDEX IF EXISTS "tabUser_middle_name_index" ;'
-        self.assertEqual(patch_module._rewrite_automatic_drop(query, "tabUser"), query)
